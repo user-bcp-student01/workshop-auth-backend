@@ -73,6 +73,12 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>${surefire-plugin.version}</version>
                 <configuration>
+                    <environmentVariables>
+                        <AUTH_DB_URL>jdbc:sqlite:${project.build.directory}${file.separator}auth-test.db</AUTH_DB_URL>
+                        <AUTH_PASSWORD_ITERATIONS>10000</AUTH_PASSWORD_ITERATIONS>
+                        <AUTH_SEED_STUDENT_PASSWORD>Workshop123!</AUTH_SEED_STUDENT_PASSWORD>
+                        <AUTH_SEED_TRAINER_PASSWORD>Trainer123!</AUTH_SEED_TRAINER_PASSWORD>
+                    </environmentVariables>
                     <systemPropertyVariables>
                         <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
                     </systemPropertyVariables>
@@ -85,6 +91,7 @@
                 <executions>
                     <execution>
                         <id>prepare-agent</id>
+                        <configuration><append>false</append></configuration>
                         <goals>
                             <goal>prepare-agent</goal>
                         </goals>
@@ -95,6 +102,34 @@
                         <goals>
                             <goal>report</goal>
                         </goals>
+                    </execution>
+                    <execution>
+                        <id>check-modified-code</id>
+                        <phase>verify</phase>
+                        <goals><goal>check</goal></goals>
+                        <configuration>
+                            <rules>
+                                <rule>
+                                    <element>CLASS</element>
+                                    <includes>
+                                        <include>com.bcp.workshop.auth.AuthResource*</include>
+                                        <include>com.bcp.workshop.auth.AuthService</include>
+                                        <include>com.bcp.workshop.auth.LegacyDatabase</include>
+                                        <include>com.bcp.workshop.auth.LegacyTokenUtil</include>
+                                        <include>com.bcp.workshop.auth.PasswordHasher</include>
+                                        <include>com.bcp.workshop.auth.PasswordMigration</include>
+                                        <include>com.bcp.workshop.auth.StoredCredentials</include>
+                                    </includes>
+                                    <limits>
+                                        <limit>
+                                            <counter>LINE</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>0.85</minimum>
+                                        </limit>
+                                    </limits>
+                                </rule>
+                            </rules>
+                        </configuration>
                     </execution>
                 </executions>
             </plugin>
