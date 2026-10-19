@@ -1,5 +1,31 @@
 # Pruebas de los endpoints
 
+## Implementación aprobada H-03 a H-07
+
+Los resultados, comandos, salidas y diffs actuales están en
+[items/RESULTADOS.md](items/RESULTADOS.md). Las secciones siguientes conservan
+la caracterización histórica de 39 pruebas: sus snippets/resultados no
+describen las correcciones posteriores de token, CORS y errores.
+La fuente ejecutable actual es [el directorio de tests](../src/test/java/com/bcp/workshop/auth/).
+
+| endpoint | caso | tipo | resultado esperado |
+|---|---|---|---|
+| POST /auth/login | JWT, claims y firma | feliz/borde/error | 200; firma RS256 verificable; verificador rechaza alteración, clave errónea y vencimiento |
+| POST /auth/login | CORS local/origen ajeno/método/header | feliz/borde/error | permisos solo para origen y valores configurados |
+| POST /auth/login | Sin Origin | feliz | 200 sin requisito nuevo de autenticación |
+| POST /auth/login | SQL inaccesible/hash inválido/excepción sin mensaje | error | 500 `{"message":"Internal server error"}`; causa solo en servidor |
+| POST /auth/login | Contraseña incorrecta/entrada inválida/rechazo framework | error | 401/400/405/406/415 previos intactos |
+| POST /auth/login | Escape de &, <, >, comillas, Unicode y entidades previas | borde | salida HTML4 exacta conservada con las dependencias actualizadas |
+| POST /auth/login (servicio) | Usuario ausente/clave errónea/identidad válida | feliz/borde/error | dobles confirman una consulta exacta; cero verificaciones si ausente y una con contraseña original si existe |
+
+Última ejecución completa: **51 pruebas**, salida **0**, sin fallos/errores/
+omitidas. JaCoCo **205/208 líneas (98,56%)**; clases modificadas/agregadas
+de esta implementación: **100%**. Medición: contadores `LINE` de
+[jacoco.xml](../target/site/jacoco/jacoco.xml), sin acumulación (`append=false`),
+gate por clase >=85% en `mvn verify`.
+
+## Evidencia histórica previa a esta implementación
+
 Ejecución real: 2026-10-19. Contrato de referencia:
 [ENDPOINTS.md](ENDPOINTS.md). Meta: [REGLAS.md](../REGLAS.md), cobertura
 de código modificado de 85 % o superior.

@@ -1,5 +1,17 @@
 # Propuesta de corrección: items 3, 4, 5, 6 y 7
 
+## Autorización de implementación registrada — 2026-10-19
+
+El usuario aprobó implementar secuencialmente H-03 a H-07 y confirmó
+explícitamente: JWT RS256, `sub`, `role`, `iss=workshop-auth-backend`,
+`aud=workshop-api`, `iat`, `exp`, duración 3600 segundos; responsables
+externos acordaron formato, distribución de clave pública y transición.
+Autorizó CORS limitado al origen local `http://localhost:4200`, GET/POST
+y cabeceras necesarias, y HTTP 500 genérico `{"message":"Internal server error"}`
+para errores internos/SQL sin campo `exception`. Esta autorización levanta
+los bloqueos contractuales que se describen históricamente a continuación.
+No autoriza leer o modificar componentes externos ni alterar otros campos.
+
 ## Alcance y estado de aprobación
 
 Los números solicitados corresponden a **H-03, H-04, H-05, H-06 y H-07** de

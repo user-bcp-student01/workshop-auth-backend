@@ -83,14 +83,14 @@ class EndpointContractTest {
     }
 
     @Test
-    void characterizesKnownSqlFailureBugAsHttp401() throws Exception {
+    void reportsSqlFailureAsGenericHttp500() throws Exception {
         try (var connection = TestDatabase.connection(); var statement = connection.createStatement()) {
             statement.executeUpdate("ALTER TABLE legacy_users RENAME TO endpoint_unavailable_users");
             try {
                 given().contentType("application/json")
                         .body(Map.of("username", "student", "password", "Workshop123!"))
-                        .post(LOGIN).then().statusCode(401).body("$", aMapWithSize(1))
-                        .body("message", is("Invalid user student or password"));
+                        .post(LOGIN).then().statusCode(500).body("$", aMapWithSize(1))
+                        .body("message", is("Internal server error"));
             } finally {
                 statement.executeUpdate("ALTER TABLE endpoint_unavailable_users RENAME TO legacy_users");
             }
@@ -98,7 +98,7 @@ class EndpointContractTest {
     }
 
     @Test
-    void characterizesKnownInternalErrorDisclosureBugOverHttp() throws Exception {
+    void doesNotDiscloseInternalErrorsOverHttp() throws Exception {
         TestDatabase.insert("invalid-hash-user", "test-only", "Invalid hash", "STUDENT");
         try {
             try (var connection = TestDatabase.connection();
@@ -110,9 +110,8 @@ class EndpointContractTest {
             }
             given().contentType("application/json")
                     .body(Map.of("username", "invalid-hash-user", "password", "test-only"))
-                    .post(LOGIN).then().statusCode(500).body("$", aMapWithSize(2))
-                    .body("message", is("Unsupported password hash format"))
-                    .body("exception", is("java.lang.IllegalArgumentException"));
+                    .post(LOGIN).then().statusCode(500).body("$", aMapWithSize(1))
+                    .body("message", is("Internal server error"));
         } finally {
             deleteFixture("invalid-hash-user");
         }

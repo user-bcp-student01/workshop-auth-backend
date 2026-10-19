@@ -61,7 +61,7 @@ class PasswordMigrationTest {
         }
         LegacyDatabase database = TestDatabase.database("jdbc:sqlite:" + file);
         database.initialize();
-        AuthService service = new AuthService(database, TestDatabase.hasher());
+        AuthService service = new AuthService(database, TestDatabase.hasher(), TestDatabase.tokens());
         assertNotNull(service.authenticate("student", longPassword));
         assertNull(service.authenticate("student", "Workshop123!"));
         assertNotNull(service.authenticate("trainer", "shared"));

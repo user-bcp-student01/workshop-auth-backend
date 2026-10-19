@@ -1,0 +1,284 @@
+--- a/HALLAZGOS.md
++++ b/HALLAZGOS.md
+@@ -13,7 +13,7 @@
+ | H-02 | Datos: contraseñas en texto plano | Vulnerabilidad | Originalmente se insertaban y comparaban contraseñas planas. Resuelto en código mediante PBKDF2-HMAC-SHA256 con salt aleatorio individual, coste configurable y migración transaccional/idempotente a `password_hash`, sin fallback plano. Conserva identidades y no expone hashes en respuesta. Se verificó solo con bases aisladas: la base real no se migró durante este trabajo y sus restos/copias requieren manejo autorizado. | [PasswordHasher.java:33](src/main/java/com/bcp/workshop/auth/PasswordHasher.java#L33); [PasswordHasher.java:40](src/main/java/com/bcp/workshop/auth/PasswordHasher.java#L40); [PasswordMigration.java:29](src/main/java/com/bcp/workshop/auth/PasswordMigration.java#L29); [AuthService.java:17](src/main/java/com/bcp/workshop/auth/AuthService.java#L17); [PasswordStorageTest.java](src/test/java/com/bcp/workshop/auth/PasswordStorageTest.java); [PasswordMigrationTest.java](src/test/java/com/bcp/workshop/auth/PasswordMigrationTest.java) | alta | Resuelto |
+ | H-03 | Token: Base64 con secreto embebido | Vulnerabilidad | Resuelto con JWT RS256, claims acordados, expiración 3600 s y clave RSA externa; transición confirmada por el usuario. `TokenContractTest` falla antes y pasa después; `TokenServiceTest` verifica firma, alteración, expiración y configuración. | [TokenService.java](src/main/java/com/bcp/workshop/auth/TokenService.java); [TokenServiceTest.java](src/test/java/com/bcp/workshop/auth/TokenServiceTest.java); [diff H-03](docs/items/H-03.diff) | alta | Resuelto |
+ | H-04 | Configuración: secreto fijo y CORS permisivo | Vulnerabilidad | Resuelto: H-03 retiró el secreto legado; CORS ahora limita orígenes externos explícitos, GET/POST y headers necesarios, con validación al iniciar. `CorsConfigurationTest` pasa tras 2 fallos previos; `CorsValidationTest` rechaza configuración inválida. | [CorsConfiguration.java](src/main/java/com/bcp/workshop/auth/CorsConfiguration.java); [application.properties](src/main/resources/application.properties); [diff H-04](docs/items/H-04.diff) | alta | Resuelto |
+-| H-05 | Errores: respuesta expone detalles internos | Vulnerabilidad | HTTP 500 conserva mensaje y clase de la excepción para no cambiar el contrato. Ahora existe logging de servidor, pero no se corrigió la exposición al cliente. Los fallos SQL de consulta siguen registrándose y retornando `null`, que termina en HTTP 401. | [AuthResource.java:39](src/main/java/com/bcp/workshop/auth/AuthResource.java#L39); [LegacyDatabase.java:61](src/main/java/com/bcp/workshop/auth/LegacyDatabase.java#L61) | media | Pendiente |
++| H-05 | Errores: respuesta expone detalles internos | Vulnerabilidad | Resuelto: excepción de persistencia con causa y un único log en Resource; SQL y fallos internos responden 500 genérico sin clase ni detalles. Las pruebas de Resource, repositorio, HTTP y salud pasan tras 5 fallos esperados antes del cambio. | [AuthenticationPersistenceException.java](src/main/java/com/bcp/workshop/auth/AuthenticationPersistenceException.java); [AuthResourceTest.java](src/test/java/com/bcp/workshop/auth/AuthResourceTest.java); [diff H-05](docs/items/H-05.diff) | media | Resuelto |
+ | H-06 | SCA: Quarkus `3.27.4` y Commons Text `1.9` presentes | Sugerencia | Las versiones siguen declaradas y se mantiene `escapeHtml4`. No se investigaron advisories ni se ejecutaron scanners, por lo que no se confirma un CVE. Severidad media de priorización de investigación, no calificación CVE. | [pom.xml:13](pom.xml#L13); [pom.xml:49](pom.xml#L49); [pom.xml:50](pom.xml#L50); [AuthResource.java:62](src/main/java/com/bcp/workshop/auth/AuthResource.java#L62) | media | Pendiente |
+ | H-07 | Clean code: Resource concentra responsabilidades | Refactor | La separación mínima necesaria para H-02 introdujo servicio, repositorio, hasher y migración; Resource conserva validación y mapeo HTTP con retornos tempranos, DTOs propios y duración compartida. No se cierra este ID fuera de la selección aprobada; queda pendiente su revisión específica, sin afirmar que el código mantiene intacta la concentración original. | [AuthResource.java:27](src/main/java/com/bcp/workshop/auth/AuthResource.java#L27); [AuthResource.java:60](src/main/java/com/bcp/workshop/auth/AuthResource.java#L60); [AuthService.java](src/main/java/com/bcp/workshop/auth/AuthService.java); [LegacyDatabase.java](src/main/java/com/bcp/workshop/auth/LegacyDatabase.java) | baja | Pendiente |
+ 
+--- a/README.md
++++ b/README.md
+@@ -115,7 +115,7 @@
+ 
+ Históricamente H-03 conservó el formato legado. La implementación aprobada
+ posteriormente lo sustituye por JWT RS256 (ver sección siguiente).
+-H-05 y H-06 aún no fueron corregidos en este paso;
++H-06 aún no fue corregido en este paso;
+ se mantienen los errores HTTP documentados, incluido el 401 ante fallo de
+ consulta. H-07 no se cierra fuera del alcance aprobado.
+ 
+@@ -140,3 +140,11 @@
+ `http://localhost:4200`. Una lista vacía o inválida impide iniciar.
+ Solo se autorizan GET/POST y headers accept, authorization, content-type.
+ No existe secreto legado que externalizar: H-03 ya eliminó ese emisor.
++
++## H-05: fallos internos
++
++Los fallos SQL conservan su causa en `AuthenticationPersistenceException`;
++solo usuario ausente/contraseña incorrecta devuelve 401. El Resource registra
++una vez la excepción sin request ni credenciales y responde
++`500 {"message":"Internal server error"}`. No cambia errores de validación
++o deserialización ni incorpora un mapper global.
+--- a/docs/ENDPOINTS.md
++++ b/docs/ENDPOINTS.md
+@@ -145,13 +145,13 @@
+ | 400 | `username` ausente, `null`, vacío o solo caracteres eliminados por `trim()`. Incluye `{}`. | `{"message":"Username is required"}` |
+ | 400 | El usuario pasa la validación, pero `password` falta, es `null` o está vacío según `trim()`. | `{"message":"Password is required"}` |
+ | 401 | Usuario inexistente o contraseña incorrecta. El nombre se interpola literalmente en el mensaje. | `{"message":"Invalid user student or password"}` |
+-| 401 | La consulta SQLite captura un `SQLException` y devuelve `null`. El cliente recibe la misma respuesta que para credenciales inválidas; no puede distinguir las causas. | `{"message":"Invalid user student or password"}` |
+-| 500 | Una excepción llega al `catch` del Resource. Ejemplo real: hash almacenado con formato inválido en una base de prueba. | `{"message":"Unsupported password hash format","exception":"java.lang.IllegalArgumentException"}` |
+-| 500 | La excepción capturada no tiene mensaje; se usa el literal `Unknown error`. Ejemplo verificado mediante el doble de servicio de la prueba existente. | `{"message":"Unknown error","exception":"java.lang.IllegalStateException"}` |
+-
+-Para HTTP 500, `message` es el mensaje real de la excepción y `exception`
+-su nombre completo de clase; no son constantes ni una lista cerrada de clases.
+-La aplicación registra la excepción en el servidor.
++| 500 | Fallo de consulta SQLite: se propaga la causa y no se interpreta como credenciales incorrectas. | `{"message":"Internal server error"}` |
++| 500 | Una excepción llega al Resource: por ejemplo hash inválido almacenado, fallo inesperado o excepción sin mensaje. | `{"message":"Internal server error"}` |
++
++Para HTTP 500, `message` es constante y no hay campo `exception`.
++La aplicación registra la causa una sola vez en el servidor, sin request,
++contraseña, hash ni token. Los fallos de inicialización impiden arrancar;
++no son respuestas HTTP de un proceso en servicio.
+ 
+ Fuentes: [AuthResource.login](../src/main/java/com/bcp/workshop/auth/AuthResource.java#L27),
+ [LegacyDatabase.findByUsername](../src/main/java/com/bcp/workshop/auth/LegacyDatabase.java#L52),
+@@ -196,9 +196,9 @@
+   `MessageDigest.isEqual`. Coste por defecto: 600000 iteraciones, configurable
+   mediante `AUTH_PASSWORD_ITERATIONS`; cada hash conserva su coste.
+ - La búsqueda de usuario y las inserciones usan parámetros JDBC.
+-- HTTP 500 aún expone clase y mensaje internos; no mostrar indiscriminadamente
+-  esos detalles a usuarios finales. El 401 ante fallo SQL puede ocultar una
+-  incidencia de infraestructura.
++- HTTP 500 no expone clase ni mensaje internos. Un fallo SQL produce 500,
++  mientras 401 se reserva a credenciales incorrectas. Los logs operativos
++  con causas internas deben tener acceso restringido.
+ - CORS permite por defecto solo `http://localhost:4200`, métodos `GET,POST`
+   y cabeceras `accept,authorization,content-type`. Se configura una lista
+   de orígenes explícitos separados por comas mediante `AUTH_CORS_ORIGINS`;
+--- a/docs/TESTING.md
++++ b/docs/TESTING.md
+@@ -13,6 +13,8 @@
+ | POST /auth/login | JWT, claims y firma | feliz/borde/error | 200; firma RS256 verificable; verificador rechaza alteración, clave errónea y vencimiento |
+ | POST /auth/login | CORS local/origen ajeno/método/header | feliz/borde/error | permisos solo para origen y valores configurados |
+ | POST /auth/login | Sin Origin | feliz | 200 sin requisito nuevo de autenticación |
++| POST /auth/login | SQL inaccesible/hash inválido/excepción sin mensaje | error | 500 `{"message":"Internal server error"}`; causa solo en servidor |
++| POST /auth/login | Contraseña incorrecta/entrada inválida/rechazo framework | error | 401/400/405/406/415 previos intactos |
+ 
+ ## Evidencia histórica previa a esta implementación
+ 
+--- a/docs/items/RESULTADOS.md
++++ b/docs/items/RESULTADOS.md
+@@ -40,3 +40,19 @@
+ - [Caracterización](../../target/items/H-04-characterization-before.log),
+   [rojo](../../target/items/H-04-correction-before.log),
+   [verde](../../target/items/H-04-after.log), [diff](H-04.diff).
++
++## H-05
++
++- Antes: `mvn "-Dtest=EndpointContractTest,AuthResourceTest,LegacyDatabaseTest,HealthResourceTest" test`,
++  salida 0, 26 pruebas.
++- Corrección antes: mismo comando con expectativas aprobadas, salida 1,
++  26 pruebas y 5 fallos esperados (SQL 401 y detalles internos).
++- Después: `mvn verify`, salida 0, 47 pruebas verdes y gate JaCoCo >=85%
++  por clase, incluida la excepción nueva.
++- `AuthResourceTest` captura un único registro con causa, con/sin mensaje,
++  sin contraseña del request; `LegacyDatabaseTest` exige causa SQLException.
++  Las pruebas HTTP comprueban cuerpo exacto de un campo y los fixtures se
++  restauran en `finally`. Salud y errores de framework permanecen intactos.
++- [Antes](../../target/items/H-05-characterization-before.log),
++  [rojo](../../target/items/H-05-correction-before.log),
++  [verde](../../target/items/H-05-after.log), [diff](H-05.diff).
+--- a/pom.xml
++++ b/pom.xml
+@@ -122,6 +122,7 @@
+                                         <include>com.bcp.workshop.auth.LegacyTokenUtil</include>
+                                         <include>com.bcp.workshop.auth.TokenService</include>
+                                         <include>com.bcp.workshop.auth.CorsConfiguration</include>
++                                        <include>com.bcp.workshop.auth.AuthenticationPersistenceException</include>
+                                         <include>com.bcp.workshop.auth.PasswordHasher</include>
+                                         <include>com.bcp.workshop.auth.PasswordMigration</include>
+                                         <include>com.bcp.workshop.auth.StoredCredentials</include>
+--- a/src/main/java/com/bcp/workshop/auth/AuthResource.java
++++ b/src/main/java/com/bcp/workshop/auth/AuthResource.java
+@@ -38,9 +38,8 @@
+             return Response.ok(success(user)).build();
+         } catch (Exception error) {
+             LOG.error("Authentication request failed", error);
+-            return Response.status(Response.Status.INTERNAL_SERVER_ERROR).entity(Map.of(
+-                    "message", error.getMessage() == null ? "Unknown error" : error.getMessage(),
+-                    "exception", error.getClass().getName())).build();
++            return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
++                    .entity(Map.of("message", "Internal server error")).build();
+         }
+     }
+ 
+--- /dev/null
++++ b/src/main/java/com/bcp/workshop/auth/AuthenticationPersistenceException.java
+@@ -0,0 +1,9 @@
++package com.bcp.workshop.auth;
++
++import java.sql.SQLException;
++
++public class AuthenticationPersistenceException extends RuntimeException {
++    public AuthenticationPersistenceException(SQLException cause) {
++        super("Unable to query authentication database", cause);
++    }
++}
+--- a/src/main/java/com/bcp/workshop/auth/LegacyDatabase.java
++++ b/src/main/java/com/bcp/workshop/auth/LegacyDatabase.java
+@@ -57,9 +57,7 @@
+                 return rows.next() ? mapCredentials(rows) : null;
+             }
+         } catch (SQLException error) {
+-            // Preserve the documented 401 on query failure until H-05 is authorized.
+-            LOG.error("Unable to query authentication database", error);
+-            return null;
++            throw new AuthenticationPersistenceException(error);
+         }
+     }
+ 
+--- a/src/test/java/com/bcp/workshop/auth/AuthResourceTest.java
++++ b/src/test/java/com/bcp/workshop/auth/AuthResourceTest.java
+@@ -92,8 +92,20 @@
+     }
+ 
+     @Test
+-    void preservesExceptionResponses() {
++    void hidesExceptionDetailsAndLogsCauseOnceWithoutRequestSecrets() {
+         for (String message : new String[]{"test failure", null}) {
++            var records = new java.util.ArrayList<java.util.logging.LogRecord>();
++            var logger = java.util.logging.Logger.getLogger(AuthResource.class.getName());
++            var handler = new java.util.logging.Handler() {
++                @Override
++                public void publish(java.util.logging.LogRecord record) {
++                    records.add(record);
++                }
++                @Override
++                public void flush() {}
++                @Override
++                public void close() {}
++            };
+             AuthResource resource = new AuthResource();
+             resource.service = new AuthService(TestDatabase.database(), TestDatabase.hasher(), TestDatabase.tokens()) {
+                 @Override
+@@ -103,11 +115,21 @@
+             };
+             LoginRequest request = new LoginRequest();
+             request.username = "student";
+-            request.password = "test";
+-            var response = resource.login(request);
+-            assertEquals(500, response.getStatus());
+-            assertEquals(Map.of("message", message == null ? "Unknown error" : message,
+-                    "exception", IllegalStateException.class.getName()), response.getEntity());
++            request.password = "request-password-never-log";
++            logger.addHandler(handler);
++            try {
++                var response = resource.login(request);
++                assertEquals(500, response.getStatus());
++                assertEquals(Map.of("message", "Internal server error"), response.getEntity());
++                assertEquals(1, records.size());
++                assertEquals(message, records.getFirst().getThrown().getMessage());
++                var trace = new java.io.StringWriter();
++                records.getFirst().getThrown().printStackTrace(new java.io.PrintWriter(trace));
++                org.junit.jupiter.api.Assertions.assertFalse(
++                        (records.getFirst().getMessage() + trace).contains(request.password));
++            } finally {
++                logger.removeHandler(handler);
++            }
+         }
+     }
+ }
+--- a/src/test/java/com/bcp/workshop/auth/EndpointContractTest.java
++++ b/src/test/java/com/bcp/workshop/auth/EndpointContractTest.java
+@@ -83,14 +83,14 @@
+     }
+ 
+     @Test
+-    void characterizesKnownSqlFailureBugAsHttp401() throws Exception {
++    void reportsSqlFailureAsGenericHttp500() throws Exception {
+         try (var connection = TestDatabase.connection(); var statement = connection.createStatement()) {
+             statement.executeUpdate("ALTER TABLE legacy_users RENAME TO endpoint_unavailable_users");
+             try {
+                 given().contentType("application/json")
+                         .body(Map.of("username", "student", "password", "Workshop123!"))
+-                        .post(LOGIN).then().statusCode(401).body("$", aMapWithSize(1))
+-                        .body("message", is("Invalid user student or password"));
++                        .post(LOGIN).then().statusCode(500).body("$", aMapWithSize(1))
++                        .body("message", is("Internal server error"));
+             } finally {
+                 statement.executeUpdate("ALTER TABLE endpoint_unavailable_users RENAME TO legacy_users");
+             }
+@@ -98,7 +98,7 @@
+     }
+ 
+     @Test
+-    void characterizesKnownInternalErrorDisclosureBugOverHttp() throws Exception {
++    void doesNotDiscloseInternalErrorsOverHttp() throws Exception {
+         TestDatabase.insert("invalid-hash-user", "test-only", "Invalid hash", "STUDENT");
+         try {
+             try (var connection = TestDatabase.connection();
+@@ -110,9 +110,8 @@
+             }
+             given().contentType("application/json")
+                     .body(Map.of("username", "invalid-hash-user", "password", "test-only"))
+-                    .post(LOGIN).then().statusCode(500).body("$", aMapWithSize(2))
+-                    .body("message", is("Unsupported password hash format"))
+-                    .body("exception", is("java.lang.IllegalArgumentException"));
++                    .post(LOGIN).then().statusCode(500).body("$", aMapWithSize(1))
++                    .body("message", is("Internal server error"));
+         } finally {
+             deleteFixture("invalid-hash-user");
+         }
+--- a/src/test/java/com/bcp/workshop/auth/HealthResourceTest.java
++++ b/src/test/java/com/bcp/workshop/auth/HealthResourceTest.java
+@@ -52,7 +52,7 @@
+             given().contentType("application/json")
+                     .body(Map.of("username", "health-invalid-hash", "password", "test-only"))
+                     .post("/auth/login").then().statusCode(500)
+-                    .body("message", is("Unsupported password hash format"));
++                    .body("message", is("Internal server error"));
+             assertUp(given().get(HEALTH));
+         } finally {
+             try (var connection = TestDatabase.connection();
+--- a/src/test/java/com/bcp/workshop/auth/LegacyDatabaseTest.java
++++ b/src/test/java/com/bcp/workshop/auth/LegacyDatabaseTest.java
+@@ -24,19 +24,23 @@
+     }
+ 
+     @Test
+-    void characterizesQueryFailureAsInvalidCredentials() throws Exception {
++    void propagatesQueryFailureWithCauseAndGenericHttp500() throws Exception {
+         LegacyDatabase database = TestDatabase.database();
+         database.initialize();
+         try (var connection = TestDatabase.connection(); var statement = connection.createStatement()) {
+             statement.executeUpdate("ALTER TABLE legacy_users RENAME TO unavailable_users");
+             try {
+-                assertNull(database.findByUsername("student"));
++                var failure = assertThrows(AuthenticationPersistenceException.class,
++                        () -> database.findByUsername("student"));
++                assertInstanceOf(java.sql.SQLException.class, failure.getCause());
+                 AuthResource resource = new AuthResource();
+                 resource.service = new AuthService(database, TestDatabase.hasher(), TestDatabase.tokens());
+                 LoginRequest request = new LoginRequest();
+                 request.username = "student";
+                 request.password = "Workshop123!";
+-                assertEquals(401, resource.login(request).getStatus());
++                var response = resource.login(request);
++                assertEquals(500, response.getStatus());
++                assertEquals(java.util.Map.of("message", "Internal server error"), response.getEntity());
+             } finally {
+                 statement.executeUpdate("ALTER TABLE unavailable_users RENAME TO legacy_users");
+             }

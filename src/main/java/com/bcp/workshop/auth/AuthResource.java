@@ -38,9 +38,8 @@ public class AuthResource {
             return Response.ok(success(user)).build();
         } catch (Exception error) {
             LOG.error("Authentication request failed", error);
-            return Response.status(Response.Status.INTERNAL_SERVER_ERROR).entity(Map.of(
-                    "message", error.getMessage() == null ? "Unknown error" : error.getMessage(),
-                    "exception", error.getClass().getName())).build();
+            return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity(Map.of("message", "Internal server error")).build();
         }
     }
 
@@ -60,7 +59,7 @@ public class AuthResource {
     private LoginResponse success(UserRecord user) {
         UserResponse publicUser = new UserResponse(user.username(),
                 StringEscapeUtils.escapeHtml4(user.displayName()), user.role());
-        return new LoginResponse(service.createToken(user), LegacyTokenUtil.EXPIRATION_SECONDS, publicUser, LEGACY_DEBUG);
+        return new LoginResponse(service.createToken(user), TokenService.EXPIRATION_SECONDS, publicUser, LEGACY_DEBUG);
     }
 
     public record UserResponse(String username, String displayName, String role) {}

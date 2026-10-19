@@ -57,9 +57,7 @@ public class LegacyDatabase {
                 return rows.next() ? mapCredentials(rows) : null;
             }
         } catch (SQLException error) {
-            // Preserve the documented 401 on query failure until H-05 is authorized.
-            LOG.error("Unable to query authentication database", error);
-            return null;
+            throw new AuthenticationPersistenceException(error);
         }
     }
 

@@ -7,11 +7,13 @@ import jakarta.inject.Inject;
 public class AuthService {
     private final LegacyDatabase database;
     private final PasswordHasher hasher;
+    private final TokenService tokens;
 
     @Inject
-    public AuthService(LegacyDatabase database, PasswordHasher hasher) {
+    public AuthService(LegacyDatabase database, PasswordHasher hasher, TokenService tokens) {
         this.database = database;
         this.hasher = hasher;
+        this.tokens = tokens;
     }
 
     public UserRecord authenticate(String username, String password) {
@@ -23,6 +25,6 @@ public class AuthService {
     }
 
     String createToken(UserRecord user) {
-        return LegacyTokenUtil.create(user.username(), user.role());
+        return tokens.create(user);
     }
 }

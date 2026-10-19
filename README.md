@@ -16,10 +16,16 @@ no son necesarias.
 ```powershell
 $env:AUTH_SEED_STUDENT_PASSWORD = 'Workshop123!'
 $env:AUTH_SEED_TRAINER_PASSWORD = 'Trainer123!'
-mvn quarkus:dev
+$env:AUTH_TOKEN_PRIVATE_KEY = 'C:\ruta\aislada\signing-private.pem'
+mvn quarkus:dev -Dquarkus.enforceBuildGoal=false
 ```
 
 Servicio: `http://localhost:8080`
+
+La ruta de clave es ilustrativa: provisionar fuera de Git una clave RSA
+PKCS#8 PEM de al menos 2048 bits antes de iniciar; no usar la clave de tests.
+El override de desarrollo evita la omisión del arranque por la configuración
+preexistente del plugin sin ejecución `build`; no modifica quality gates.
 
 Credenciales locales:
 
@@ -37,7 +43,8 @@ La rama contiene deuda técnica y de seguridad deliberada: SQL concatenado, cont
 
 ## Correcciones locales y configuración
 
-Esta copia implementa H-01 y H-02 de [HALLAZGOS.md](HALLAZGOS.md).
+Esta copia implementa los siete items de [HALLAZGOS.md](HALLAZGOS.md).
+Los apartados H-01/H-02 siguientes conservan la justificación histórica.
 Las consultas usan parámetros y las contraseñas se verifican con
 PBKDF2-HMAC-SHA256 del JDK, con salt aleatorio de 16 bytes y clave de 32 bytes.
 Se eligió en lugar de BCrypt, con aprobación humana, para admitir contraseñas
@@ -50,6 +57,8 @@ La descripción de deuda de `main` es histórica, no un resultado de un escáner
 | `AUTH_PASSWORD_ITERATIONS` | Coste de PBKDF2, por defecto `600000`; rango validado `10000` a `2000000`. El mínimo solo se usa para agilizar pruebas aisladas, no se recomienda como coste de despliegue. |
 | `AUTH_SEED_STUDENT_PASSWORD` | Contraseña para crear `student` si falta. Nunca reemplaza un usuario existente. |
 | `AUTH_SEED_TRAINER_PASSWORD` | Contraseña para crear `trainer` si falta. Nunca reemplaza un usuario existente. |
+| `AUTH_TOKEN_PRIVATE_KEY` | Obligatoria: ruta al PEM PKCS#8 RSA externo de firma; sin valor por defecto. |
+| `AUTH_CORS_ORIGINS` | Lista de orígenes HTTP(S) explícitos; por defecto `http://localhost:4200`. |
 
 El formato almacenado incluye algoritmo, iteraciones, salt y hash. La
 comparación usa `MessageDigest.isEqual`. El coste se conserva en cada hash,
@@ -97,6 +106,9 @@ también ejercitan 600000 iteraciones. No se usa `data/workshop.db` al probar.
 de producción modificada/agregada, sin exclusiones de esas clases.
 El informe se genera en [target/site/jacoco/index.html](target/site/jacoco/index.html).
 
+Tabla histórica H-01/H-02 y primera caracterización de H-03; los resultados
+actuales H-03 a H-07 están en [docs/items/RESULTADOS.md](docs/items/RESULTADOS.md).
+
 | Hallazgo | Caracterización antes / después | Corrección antes / después | Diff |
 |---|---|---|---|
 | H-01 | 9 pruebas pasan antes; las mismas expectativas se conservan después | Las 3 regresiones SQL fallan antes y pasan después | [H-01.diff](docs/H-01.diff), cambio intermedio parametrizado |
@@ -113,7 +125,58 @@ migración y del hasher no se ejecutaron contra clases que aún no existían.
 La verificación final incluye 24 pruebas, sin fallos ni errores, incluida la
 protección frente a un fallo del propio rollback (no activa autocommit).
 
-H-03 conserva el formato legado para respetar
-[docs/ENDPOINTS.md](docs/ENDPOINTS.md). H-04, H-05 y H-06 no fueron corregidos;
-se mantienen los errores HTTP documentados, incluido el 401 ante fallo de
-consulta. H-07 no se cierra fuera del alcance aprobado.
+Históricamente H-03 conservó el formato legado. La implementación aprobada
+posteriormente lo sustituye por JWT RS256 (ver sección siguiente).
+La investigación H-06 y los errores autorizados H-05 se documentan al final.
+El 401 histórico ante fallo SQL se sustituyó por 500 genérico.
+
+## H-03: firma aprobada y clave externa
+
+El emisor usa `quarkus-smallrye-jwt-build`, administrado por el BOM, para
+firma estándar en lugar de criptografía propia. Configurar
+`AUTH_TOKEN_PRIVATE_KEY` con una ruta a PKCS#8 PEM RSA de al menos 2048 bits.
+No hay clave privada de producción versionada ni fallback Base64.
+Las pruebas generan pares efímeros bajo `target/` y eliminan sus claves.
+
+Los responsables externos confirmaron RS256, claims `sub`, `role`,
+`iss=workshop-auth-backend`, `aud=workshop-api`, `iat`, `exp` y plazo 3600 s.
+Deben recibir solo la clave pública por un canal acordado y verificar esos
+valores; no reutilizar la constante de laboratorio eliminada. La aceptación
+externa es confirmación humana, no una prueba ejecutada en otros repositorios.
+
+## H-04: política CORS explícita
+
+`AUTH_CORS_ORIGINS` admite orígenes HTTP(S) explícitos separados por comas,
+sin rutas, usuarios, query ni fragmentos; predeterminado
+`http://localhost:4200`. Una lista vacía o inválida impide iniciar.
+Solo se autorizan GET/POST y headers accept, authorization, content-type.
+No existe secreto legado que externalizar: H-03 ya eliminó ese emisor.
+
+## H-05: fallos internos
+
+Los fallos SQL conservan su causa en `AuthenticationPersistenceException`;
+solo usuario ausente/contraseña incorrecta devuelve 401. El Resource registra
+una vez la excepción sin request ni credenciales y responde
+`500 {"message":"Internal server error"}`. No cambia errores de validación
+o deserialización ni incorpora un mapper global.
+
+## H-06: dependencias investigadas
+
+BOM y plugin Quarkus alineados en 3.27.6.1 (parche de la misma línea LTS),
+Commons Text 1.10.0 (mínima corrección publicada para CVE-2022-42889).
+Se conserva `escapeHtml4`: no usa la interpolación vulnerable.
+Los rangos oficiales, condiciones de aplicabilidad, árboles resueltos y
+regresión están en [resultados H-06](docs/items/RESULTADOS.md#h-06).
+Dependency Review de GitHub falla por falta de soporte/configuración de
+Dependency graph en el repositorio; el responsable externo debe habilitarlo
+y reejecutarlo. No se modificaron workflows ni se sustituyó ese gate por
+la comparación local. No se declara ausencia global de vulnerabilidades.
+
+## H-07: responsabilidades verificadas
+
+No se reescribió producción: la separación existente cumple el plan.
+`AuthServiceTest` usa dobles sin SQL ni hashing real para verificar
+consulta exacta, ausencia sin verificación y una única verificación de la
+contraseña original; devuelve solo `UserRecord`. Los tests HTTP mantienen
+DTOs sin hash/ID y validación sin normalizar credenciales.
+Resultado final: 51 tests, `mvn verify` salida 0, gate por clase >=85% intacto.

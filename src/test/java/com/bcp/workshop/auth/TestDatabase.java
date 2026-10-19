@@ -43,7 +43,16 @@ final class TestDatabase {
     }
 
     static AuthService service() {
-        return new AuthService(database(), hasher());
+        return new AuthService(database(), hasher(), tokens());
+    }
+
+    static TokenService tokens() {
+        try {
+            return new TokenService(SigningKeyResource.writeKey(SigningKeyResource.generate(2048)).toString(),
+                    "workshop-auth-backend", "workshop-api");
+        } catch (Exception error) {
+            throw new IllegalStateException("Unable to create test token service", error);
+        }
     }
 
     static void insert(String username, String password, String displayName, String role) throws Exception {

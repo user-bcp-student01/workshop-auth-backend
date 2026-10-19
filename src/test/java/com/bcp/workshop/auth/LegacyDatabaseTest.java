@@ -12,7 +12,7 @@ class LegacyDatabaseTest {
     void characterizesLookupAndIdempotentSeed() {
         LegacyDatabase database = TestDatabase.database();
         database.initialize();
-        AuthService service = new AuthService(database, TestDatabase.hasher());
+        AuthService service = new AuthService(database, TestDatabase.hasher(), TestDatabase.tokens());
         UserRecord before = service.authenticate("student", "Workshop123!");
         assertNotNull(before);
         assertEquals("Workshop Student", before.displayName());
@@ -24,19 +24,23 @@ class LegacyDatabaseTest {
     }
 
     @Test
-    void characterizesQueryFailureAsInvalidCredentials() throws Exception {
+    void propagatesQueryFailureWithCauseAndGenericHttp500() throws Exception {
         LegacyDatabase database = TestDatabase.database();
         database.initialize();
         try (var connection = TestDatabase.connection(); var statement = connection.createStatement()) {
             statement.executeUpdate("ALTER TABLE legacy_users RENAME TO unavailable_users");
             try {
-                assertNull(database.findByUsername("student"));
+                var failure = assertThrows(AuthenticationPersistenceException.class,
+                        () -> database.findByUsername("student"));
+                assertInstanceOf(java.sql.SQLException.class, failure.getCause());
                 AuthResource resource = new AuthResource();
-                resource.service = new AuthService(database, TestDatabase.hasher());
+                resource.service = new AuthService(database, TestDatabase.hasher(), TestDatabase.tokens());
                 LoginRequest request = new LoginRequest();
                 request.username = "student";
                 request.password = "Workshop123!";
-                assertEquals(401, resource.login(request).getStatus());
+                var response = resource.login(request);
+                assertEquals(500, response.getStatus());
+                assertEquals(java.util.Map.of("message", "Internal server error"), response.getEntity());
             } finally {
                 statement.executeUpdate("ALTER TABLE unavailable_users RENAME TO legacy_users");
             }
@@ -50,7 +54,7 @@ class LegacyDatabaseTest {
         var database = new LegacyDatabase(url, hasher, new PasswordMigration(hasher),
                 Optional.of("custom-student"), Optional.of("custom-trainer"));
         database.initialize();
-        var service = new AuthService(database, hasher);
+        var service = new AuthService(database, hasher, TestDatabase.tokens());
         assertNotNull(service.authenticate("student", "custom-student"));
         assertNotNull(service.authenticate("trainer", "custom-trainer"));
         var withoutSeeds = new LegacyDatabase(url, hasher, new PasswordMigration(hasher),

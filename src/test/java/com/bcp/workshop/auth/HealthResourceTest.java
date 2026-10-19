@@ -52,7 +52,7 @@ class HealthResourceTest {
             given().contentType("application/json")
                     .body(Map.of("username", "health-invalid-hash", "password", "test-only"))
                     .post("/auth/login").then().statusCode(500)
-                    .body("message", is("Unsupported password hash format"));
+                    .body("message", is("Internal server error"));
             assertUp(given().get(HEALTH));
         } finally {
             try (var connection = TestDatabase.connection();

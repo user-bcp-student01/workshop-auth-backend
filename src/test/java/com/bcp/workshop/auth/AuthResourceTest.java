@@ -13,6 +13,7 @@ import static org.hamcrest.Matchers.aMapWithSize;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 @QuarkusTest
+@io.quarkus.test.common.QuarkusTestResource(SigningKeyResource.class)
 class AuthResourceTest {
     @BeforeAll
     static void fixtures() throws Exception {
@@ -91,10 +92,36 @@ class AuthResourceTest {
     }
 
     @Test
-    void preservesExceptionResponses() {
+    void preservesExactHtml4EscapingAcrossDependencyUpdates() throws Exception {
+        TestDatabase.insert("escape-contract", "test-only", "&<>\"' Ω中文 &amp;", "STUDENT");
+        given().contentType("application/json")
+                .body(Map.of("username", "escape-contract", "password", "test-only"))
+                .post("/auth/login").then().statusCode(200)
+                .body("$", aMapWithSize(4)).body("user", aMapWithSize(3))
+                .body("user.username", is("escape-contract"))
+                .body("user.displayName", is("&amp;&lt;&gt;&quot;' &Omega;中文 &amp;amp;"))
+                .body("user.role", is("STUDENT"))
+                .body("expiresIn", is(3600)).body("token", notNullValue())
+                .body("debug", is("authenticated-with-legacy-flow"));
+    }
+
+    @Test
+    void hidesExceptionDetailsAndLogsCauseOnceWithoutRequestSecrets() {
         for (String message : new String[]{"test failure", null}) {
+            var records = new java.util.ArrayList<java.util.logging.LogRecord>();
+            var logger = java.util.logging.Logger.getLogger(AuthResource.class.getName());
+            var handler = new java.util.logging.Handler() {
+                @Override
+                public void publish(java.util.logging.LogRecord record) {
+                    records.add(record);
+                }
+                @Override
+                public void flush() {}
+                @Override
+                public void close() {}
+            };
             AuthResource resource = new AuthResource();
-            resource.service = new AuthService(TestDatabase.database(), TestDatabase.hasher()) {
+            resource.service = new AuthService(TestDatabase.database(), TestDatabase.hasher(), TestDatabase.tokens()) {
                 @Override
                 public UserRecord authenticate(String username, String password) {
                     throw new IllegalStateException(message);
@@ -102,11 +129,21 @@ class AuthResourceTest {
             };
             LoginRequest request = new LoginRequest();
             request.username = "student";
-            request.password = "test";
-            var response = resource.login(request);
-            assertEquals(500, response.getStatus());
-            assertEquals(Map.of("message", message == null ? "Unknown error" : message,
-                    "exception", IllegalStateException.class.getName()), response.getEntity());
+            request.password = "request-password-never-log";
+            logger.addHandler(handler);
+            try {
+                var response = resource.login(request);
+                assertEquals(500, response.getStatus());
+                assertEquals(Map.of("message", "Internal server error"), response.getEntity());
+                assertEquals(1, records.size());
+                assertEquals(message, records.getFirst().getThrown().getMessage());
+                var trace = new java.io.StringWriter();
+                records.getFirst().getThrown().printStackTrace(new java.io.PrintWriter(trace));
+                org.junit.jupiter.api.Assertions.assertFalse(
+                        (records.getFirst().getMessage() + trace).contains(request.password));
+            } finally {
+                logger.removeHandler(handler);
+            }
         }
     }
 }

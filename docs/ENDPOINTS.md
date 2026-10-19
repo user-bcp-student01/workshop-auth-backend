@@ -8,6 +8,9 @@ Quarkus. No presupone el comportamiento de otros componentes.
 
 - Base URL local predeterminada: `http://localhost:8080`.
 - Requisitos: JDK 21, Maven 3.9+ y directorio padre de la base SQLite existente.
+- `AUTH_TOKEN_PRIVATE_KEY` es obligatorio: ruta a una clave privada RSA
+  PKCS#8 PEM de al menos 2048 bits, externa al repositorio. No hay fallback
+  de token legado. Emisor `workshop-auth-backend`, audiencia `workshop-api`.
 - Para crear una base nueva se deben configurar
   `AUTH_SEED_STUDENT_PASSWORD` y `AUTH_SEED_TRAINER_PASSWORD`. Los ejemplos de
   login de este documento suponen los valores de laboratorio
@@ -95,7 +98,7 @@ y [AuthResourceTest.java](../src/test/java/com/bcp/workshop/auth/AuthResourceTes
 
 | campo | tipo | descripción |
 |---|---|---|
-| `token` | string | Token legado Base64 estándar. No es JWT ni está firmado. Su contenido es UTF-8 de `username\|role\|expiry\|secret`, donde `expiry` es tiempo Unix en segundos. No tratar la codificación como cifrado. |
+| `token` | string | JWT firmado RS256, tres segmentos Base64URL. Claims: `sub` (usuario), `role`, `iss=workshop-auth-backend`, `aud` incluye `workshop-api`, `iat` y `exp` (tiempo Unix en segundos). No contiene el secreto legado ni la clave privada. |
 | `expiresIn` | integer | Siempre `3600`, en segundos. Coincide con el plazo usado por el emisor. No implica que este backend valide tokens después. |
 | `user` | object | Identidad pública. Solo contiene los tres campos siguientes; no contiene ID, contraseña ni hash. |
 | `user.username` | string | Nombre de usuario recuperado de la base. |
@@ -103,11 +106,11 @@ y [AuthResourceTest.java](../src/test/java/com/bcp/workshop/auth/AuthResourceTes
 | `user.role` | string | Rol almacenado. La siembra usa `STUDENT` y `TRAINER`, pero el código no impone un enum para toda base existente. |
 | `debug` | string | Valor literal `authenticated-with-legacy-flow`, conservado en la interfaz actual. |
 
-Ejemplo real completo capturado con el código actual y una base aislada:
+Ejemplo de estructura completa (el string del token es simbólico y no utilizable):
 
 ```json
 {
-  "token": "c3R1ZGVudHxTVFVERU5UfDE3OTI0NTAxNTR8V09SS1NIT1BfU0VDUkVUXzIwMjY=",
+  "token": "<header-base64url>.<claims-base64url>.<firma-rs256-base64url>",
   "expiresIn": 3600,
   "user": {
     "username": "student",
@@ -118,14 +121,16 @@ Ejemplo real completo capturado con el código actual y una base aislada:
 }
 ```
 
-El token del ejemplo es exclusivamente de laboratorio: contiene el vencimiento
-`1792450154`, no debe reutilizarse ni esperarse como valor fijo. Cada emisión
-calcula `expiry = Instant.now().plusSeconds(3600).getEpochSecond()`.
+Cada emisión calcula `exp = iat + 3600`. El consumidor debe verificar firma
+RS256 con la clave pública acordada, emisor, audiencia y vencimiento; no basta
+decodificar. La autorización humana de H-03 confirmó la transición externa.
+La prueba local valida rechazo de firma alterada, clave incorrecta y expiración;
+no representa ejecución de otros componentes.
 El orden de propiedades JSON no forma parte del contrato.
 
 Fuentes: [AuthResource.success](../src/main/java/com/bcp/workshop/auth/AuthResource.java#L60),
 [DTOs de respuesta](../src/main/java/com/bcp/workshop/auth/AuthResource.java#L66),
-[LegacyTokenUtil.create](../src/main/java/com/bcp/workshop/auth/LegacyTokenUtil.java#L13)
+[TokenService.create](../src/main/java/com/bcp/workshop/auth/TokenService.java)
 y [AuthResourceTest.java](../src/test/java/com/bcp/workshop/auth/AuthResourceTest.java#L36).
 
 ### 5. Respuestas de error
@@ -140,13 +145,13 @@ Las respuestas siguientes son JSON. No hay un objeto `error` envolvente.
 | 400 | `username` ausente, `null`, vacío o solo caracteres eliminados por `trim()`. Incluye `{}`. | `{"message":"Username is required"}` |
 | 400 | El usuario pasa la validación, pero `password` falta, es `null` o está vacío según `trim()`. | `{"message":"Password is required"}` |
 | 401 | Usuario inexistente o contraseña incorrecta. El nombre se interpola literalmente en el mensaje. | `{"message":"Invalid user student or password"}` |
-| 401 | La consulta SQLite captura un `SQLException` y devuelve `null`. El cliente recibe la misma respuesta que para credenciales inválidas; no puede distinguir las causas. | `{"message":"Invalid user student or password"}` |
-| 500 | Una excepción llega al `catch` del Resource. Ejemplo real: hash almacenado con formato inválido en una base de prueba. | `{"message":"Unsupported password hash format","exception":"java.lang.IllegalArgumentException"}` |
-| 500 | La excepción capturada no tiene mensaje; se usa el literal `Unknown error`. Ejemplo verificado mediante el doble de servicio de la prueba existente. | `{"message":"Unknown error","exception":"java.lang.IllegalStateException"}` |
+| 500 | Fallo de consulta SQLite: se propaga la causa y no se interpreta como credenciales incorrectas. | `{"message":"Internal server error"}` |
+| 500 | Una excepción llega al Resource: por ejemplo hash inválido almacenado, fallo inesperado o excepción sin mensaje. | `{"message":"Internal server error"}` |
 
-Para HTTP 500, `message` es el mensaje real de la excepción y `exception`
-su nombre completo de clase; no son constantes ni una lista cerrada de clases.
-La aplicación registra la excepción en el servidor.
+Para HTTP 500, `message` es constante y no hay campo `exception`.
+La aplicación registra la causa una sola vez en el servidor, sin request,
+contraseña, hash ni token. Los fallos de inicialización impiden arrancar;
+no son respuestas HTTP de un proceso en servicio.
 
 Fuentes: [AuthResource.login](../src/main/java/com/bcp/workshop/auth/AuthResource.java#L27),
 [LegacyDatabase.findByUsername](../src/main/java/com/bcp/workshop/auth/LegacyDatabase.java#L52),
@@ -182,30 +187,33 @@ definidos por el código de esta aplicación y no se inventan aquí.
 
 ### 6. Notas de seguridad
 
-- La refactorización **no convirtió el token en uno firmado**. Continúa siendo
-  Base64 reversible e incluye un secreto fijo. No hay verificación de firma,
-  emisor o audiencia en este backend.
-- El emisor añade una fecha de expiración, pero este backend no contiene una
-  ruta o filtro que valide la vigencia de tokens recibidos. No afirmar que
-  `expiresIn` demuestra una expiración efectivamente impuesta por consumidores.
+- El token ahora está firmado RS256 y expira según `exp`; no está cifrado.
+  Este backend emite tokens y sus rutas siguen públicas. La validación efectiva
+  en consumidores requiere firma, emisor, audiencia y fecha con clave pública.
+  La clave privada nunca se distribuye a consumidores ni se incluye en el JWT.
 - Las contraseñas ahora se almacenan y verifican con PBKDF2-HMAC-SHA256,
   salt aleatorio individual, clave de 32 bytes y comparación
   `MessageDigest.isEqual`. Coste por defecto: 600000 iteraciones, configurable
   mediante `AUTH_PASSWORD_ITERATIONS`; cada hash conserva su coste.
 - La búsqueda de usuario y las inserciones usan parámetros JDBC.
-- HTTP 500 aún expone clase y mensaje internos; no mostrar indiscriminadamente
-  esos detalles a usuarios finales. El 401 ante fallo SQL puede ocultar una
-  incidencia de infraestructura.
-- CORS sigue habilitado para cualquier origen (`/.*/`), con métodos
-  `GET,POST,PUT,DELETE,OPTIONS` y cabeceras
-  `accept,authorization,content-type,x-requested-with`.
+- HTTP 500 no expone clase ni mensaje internos. Un fallo SQL produce 500,
+  mientras 401 se reserva a credenciales incorrectas. Los logs operativos
+  con causas internas deben tener acceso restringido.
+- CORS permite por defecto solo `http://localhost:4200`, métodos `GET,POST`
+  y cabeceras `accept,authorization,content-type`. Se configura una lista
+  de orígenes explícitos separados por comas mediante `AUTH_CORS_ORIGINS`;
+  comodines, expresiones regulares, lista vacía y URLs con rutas fallan
+  al iniciar. Los preflight `OPTIONS` son gestionados por el middleware.
+  Un origen/método/header rechazado no obtiene permiso CORS; el cliente no
+  debe depender de un código HTTP concreto para diagnosticarlo.
+  CORS no sustituye autenticación ni protege clientes que no sean navegadores.
 - Ejecución exclusivamente local y aislada; no enviar credenciales reales.
   La configuración predeterminada no proporciona HTTPS. El host normal es
   `127.0.0.1`; el perfil de producción configura `0.0.0.0`.
 
 Fuentes: [PasswordHasher.java](../src/main/java/com/bcp/workshop/auth/PasswordHasher.java#L17),
 [LegacyDatabase.java](../src/main/java/com/bcp/workshop/auth/LegacyDatabase.java#L52),
-[LegacyTokenUtil.java](../src/main/java/com/bcp/workshop/auth/LegacyTokenUtil.java#L8)
+[TokenService.java](../src/main/java/com/bcp/workshop/auth/TokenService.java)
 y [application.properties](../src/main/resources/application.properties#L1).
 
 ## GET /q/health
@@ -340,7 +348,7 @@ Código y pruebas contrastados:
   [LegacyDatabase.java](../src/main/java/com/bcp/workshop/auth/LegacyDatabase.java)
   y [PasswordHasher.java](../src/main/java/com/bcp/workshop/auth/PasswordHasher.java):
   autenticación, persistencia, hashing y propagación de errores.
-- [LegacyTokenUtil.java](../src/main/java/com/bcp/workshop/auth/LegacyTokenUtil.java)
+- [TokenService.java](../src/main/java/com/bcp/workshop/auth/TokenService.java)
   y [application.properties](../src/main/resources/application.properties):
   token real, duración, red, CORS y configuración.
 

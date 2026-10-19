@@ -1,0 +1,296 @@
+--- a/HALLAZGOS.md
++++ b/HALLAZGOS.md
+@@ -15,7 +15,7 @@
+ | H-04 | Configuración: secreto fijo y CORS permisivo | Vulnerabilidad | Resuelto: H-03 retiró el secreto legado; CORS ahora limita orígenes externos explícitos, GET/POST y headers necesarios, con validación al iniciar. `CorsConfigurationTest` pasa tras 2 fallos previos; `CorsValidationTest` rechaza configuración inválida. | [CorsConfiguration.java](src/main/java/com/bcp/workshop/auth/CorsConfiguration.java); [application.properties](src/main/resources/application.properties); [diff H-04](docs/items/H-04.diff) | alta | Resuelto |
+ | H-05 | Errores: respuesta expone detalles internos | Vulnerabilidad | Resuelto: excepción de persistencia con causa y un único log en Resource; SQL y fallos internos responden 500 genérico sin clase ni detalles. Las pruebas de Resource, repositorio, HTTP y salud pasan tras 5 fallos esperados antes del cambio. | [AuthenticationPersistenceException.java](src/main/java/com/bcp/workshop/auth/AuthenticationPersistenceException.java); [AuthResourceTest.java](src/test/java/com/bcp/workshop/auth/AuthResourceTest.java); [diff H-05](docs/items/H-05.diff) | media | Resuelto |
+ | H-06 | SCA: Quarkus `3.27.4` y Commons Text `1.9` presentes | Sugerencia | Resuelto el análisis y actualización: BOM/plugin 3.27.6.1 y Commons Text 1.10.0, con advisories oficiales y comparación de coordenadas antes/después. Escape y contratos pasan; no se afirma explotación ni scanner completo: Dependency Review externo está bloqueado por configuración del repositorio. | [pom.xml](pom.xml); [evidencia y límites H-06](docs/items/RESULTADOS.md#h-06); [diff H-06](docs/items/H-06.diff) | media | Resuelto |
+-| H-07 | Clean code: Resource concentra responsabilidades | Refactor | La separación mínima necesaria para H-02 introdujo servicio, repositorio, hasher y migración; Resource conserva validación y mapeo HTTP con retornos tempranos, DTOs propios y duración compartida. No se cierra este ID fuera de la selección aprobada; queda pendiente su revisión específica, sin afirmar que el código mantiene intacta la concentración original. | [AuthResource.java:27](src/main/java/com/bcp/workshop/auth/AuthResource.java#L27); [AuthResource.java:60](src/main/java/com/bcp/workshop/auth/AuthResource.java#L60); [AuthService.java](src/main/java/com/bcp/workshop/auth/AuthService.java); [LegacyDatabase.java](src/main/java/com/bcp/workshop/auth/LegacyDatabase.java) | baja | Pendiente |
++| H-07 | Clean code: Resource concentra responsabilidades | Refactor | Resuelto por revisión de la separación ya introducida: API/DTOs → servicio → repositorio, hashing/migración y firma especializados, guard clauses y duración única. Tres pruebas con dobles en `AuthServiceTest` confirman delegación exacta, ausencia sin hash e identidad sin credenciales; no hizo falta refactor cosmético de producción. | [AuthResource.java](src/main/java/com/bcp/workshop/auth/AuthResource.java); [AuthServiceTest.java](src/test/java/com/bcp/workshop/auth/AuthServiceTest.java); [diff H-07](docs/items/H-07.diff) | baja | Resuelto |
+ 
+ ## Flujo actual
+ 
+@@ -28,13 +28,30 @@
+ 3. **Autenticación:** `AuthService` busca el usuario exacto mediante parámetros
+    y verifica PBKDF2. El repositorio devuelve un registro interno de hash y
+    usuario; el servicio solo devuelve `UserRecord`. Ausencia, contraseña
+-   incorrecta y fallo de consulta conservan HTTP 401.
+-4. **Token:** el servicio delega al emisor legado. El formato sigue siendo
+-   Base64 de cuatro segmentos y el vencimiento sigue siendo 3600 segundos.
++   incorrecta producen HTTP 401; un fallo SQL propaga la causa y produce
++   HTTP 500 genérico, registrado una vez en Resource.
++4. **Token:** el servicio delega a `TokenService` con clave RSA externa,
++   firma RS256 y claims explícitos acordados. `exp = iat + 3600`.
+ 5. **Salida:** Resource mapea a DTOs públicos con `token`, `expiresIn`, `user`
+-   y `debug`; mantiene escape de HTML, mensajes y estados documentados.
++   y `debug`; mantiene escape HTML4 y el contrato actualizado por autorización.
++   CORS limita orígenes configurados explícitamente, métodos y cabeceras.
+ 
+-## Resultados de implementación
++## Resultados actuales H-03 a H-07
++
++Cada fila se actualizó tras verificar su item antes del siguiente.
++Ver [resultados por item](docs/items/RESULTADOS.md) y diffs independientes
++en [docs/items/](docs/items/). Final: `mvn verify`, salida 0, **51 pruebas,
++0 fallos, 0 errores, 0 omitidas**. JaCoCo: **205/208 líneas, 98,56%**;
++clases de producción modificadas/agregadas en esta tanda: **100%**.
++El mínimo de todas las clases sigue siendo 93,33% en `PasswordHasher`.
++No se alteraron workflows, umbrales o datos de `data/`.
++
++Dependency Review requiere habilitación externa y reejecución; no se afirma
++que la investigación focalizada sustituya un scanner global ni ese gate.
++Los consumidores externos se coordinaron por confirmación humana, sin
++inspeccionar sus repositorios ni ejecutar integraciones fuera del ámbito.
++
++## Resultados históricos de implementación H-01/H-02
+ 
+ La aprobación humana y la sustitución autorizada de BCrypt por PBKDF2 figuran
+ en [PLAN.md](PLAN.md). No se agregaron dependencias. Las instrucciones de
+@@ -55,7 +72,7 @@
+ - [docs/ENDPOINTS.md](docs/ENDPOINTS.md) permanece byte a byte intacto:
+   SHA-256 `E75F3F208D31144B4B792D76836ED40C21B74A6FABEB22986E8C3CA3F8E6F617`.
+ 
+-No se ejecutaron scanners ni se inspeccionaron otros componentes. Las pruebas
++En aquella etapa no se ejecutaron scanners ni se inspeccionaron otros componentes. Las pruebas
+ usan SQLite dentro de `target/`; no se modificó la base existente en `data/`.
+ Los resultados no prueban que una base de despliegue ya esté migrada ni que
+ los consumidores externos acepten un token firmado.
+--- a/README.md
++++ b/README.md
+@@ -16,10 +16,16 @@
+ ```powershell
+ $env:AUTH_SEED_STUDENT_PASSWORD = 'Workshop123!'
+ $env:AUTH_SEED_TRAINER_PASSWORD = 'Trainer123!'
+-mvn quarkus:dev
++$env:AUTH_TOKEN_PRIVATE_KEY = 'C:\ruta\aislada\signing-private.pem'
++mvn quarkus:dev -Dquarkus.enforceBuildGoal=false
+ ```
+ 
+ Servicio: `http://localhost:8080`
++
++La ruta de clave es ilustrativa: provisionar fuera de Git una clave RSA
++PKCS#8 PEM de al menos 2048 bits antes de iniciar; no usar la clave de tests.
++El override de desarrollo evita la omisión del arranque por la configuración
++preexistente del plugin sin ejecución `build`; no modifica quality gates.
+ 
+ Credenciales locales:
+ 
+@@ -37,7 +43,8 @@
+ 
+ ## Correcciones locales y configuración
+ 
+-Esta copia implementa H-01 y H-02 de [HALLAZGOS.md](HALLAZGOS.md).
++Esta copia implementa los siete items de [HALLAZGOS.md](HALLAZGOS.md).
++Los apartados H-01/H-02 siguientes conservan la justificación histórica.
+ Las consultas usan parámetros y las contraseñas se verifican con
+ PBKDF2-HMAC-SHA256 del JDK, con salt aleatorio de 16 bytes y clave de 32 bytes.
+ Se eligió en lugar de BCrypt, con aprobación humana, para admitir contraseñas
+@@ -50,6 +57,8 @@
+ | `AUTH_PASSWORD_ITERATIONS` | Coste de PBKDF2, por defecto `600000`; rango validado `10000` a `2000000`. El mínimo solo se usa para agilizar pruebas aisladas, no se recomienda como coste de despliegue. |
+ | `AUTH_SEED_STUDENT_PASSWORD` | Contraseña para crear `student` si falta. Nunca reemplaza un usuario existente. |
+ | `AUTH_SEED_TRAINER_PASSWORD` | Contraseña para crear `trainer` si falta. Nunca reemplaza un usuario existente. |
++| `AUTH_TOKEN_PRIVATE_KEY` | Obligatoria: ruta al PEM PKCS#8 RSA externo de firma; sin valor por defecto. |
++| `AUTH_CORS_ORIGINS` | Lista de orígenes HTTP(S) explícitos; por defecto `http://localhost:4200`. |
+ 
+ El formato almacenado incluye algoritmo, iteraciones, salt y hash. La
+ comparación usa `MessageDigest.isEqual`. El coste se conserva en cada hash,
+@@ -97,6 +106,9 @@
+ de producción modificada/agregada, sin exclusiones de esas clases.
+ El informe se genera en [target/site/jacoco/index.html](target/site/jacoco/index.html).
+ 
++Tabla histórica H-01/H-02 y primera caracterización de H-03; los resultados
++actuales H-03 a H-07 están en [docs/items/RESULTADOS.md](docs/items/RESULTADOS.md).
++
+ | Hallazgo | Caracterización antes / después | Corrección antes / después | Diff |
+ |---|---|---|---|
+ | H-01 | 9 pruebas pasan antes; las mismas expectativas se conservan después | Las 3 regresiones SQL fallan antes y pasan después | [H-01.diff](docs/H-01.diff), cambio intermedio parametrizado |
+@@ -115,9 +127,8 @@
+ 
+ Históricamente H-03 conservó el formato legado. La implementación aprobada
+ posteriormente lo sustituye por JWT RS256 (ver sección siguiente).
+-La investigación y actualización posterior H-06 se documentan al final;
+-se mantienen los errores HTTP documentados, incluido el 401 ante fallo de
+-consulta. H-07 no se cierra fuera del alcance aprobado.
++La investigación H-06 y los errores autorizados H-05 se documentan al final.
++El 401 histórico ante fallo SQL se sustituyó por 500 genérico.
+ 
+ ## H-03: firma aprobada y clave externa
+ 
+@@ -160,3 +171,12 @@
+ Dependency graph en el repositorio; el responsable externo debe habilitarlo
+ y reejecutarlo. No se modificaron workflows ni se sustituyó ese gate por
+ la comparación local. No se declara ausencia global de vulnerabilidades.
++
++## H-07: responsabilidades verificadas
++
++No se reescribió producción: la separación existente cumple el plan.
++`AuthServiceTest` usa dobles sin SQL ni hashing real para verificar
++consulta exacta, ausencia sin verificación y una única verificación de la
++contraseña original; devuelve solo `UserRecord`. Los tests HTTP mantienen
++DTOs sin hash/ID y validación sin normalizar credenciales.
++Resultado final: 51 tests, `mvn verify` salida 0, gate por clase >=85% intacto.
+--- a/docs/TESTING.md
++++ b/docs/TESTING.md
+@@ -16,6 +16,13 @@
+ | POST /auth/login | SQL inaccesible/hash inválido/excepción sin mensaje | error | 500 `{"message":"Internal server error"}`; causa solo en servidor |
+ | POST /auth/login | Contraseña incorrecta/entrada inválida/rechazo framework | error | 401/400/405/406/415 previos intactos |
+ | POST /auth/login | Escape de &, <, >, comillas, Unicode y entidades previas | borde | salida HTML4 exacta conservada con las dependencias actualizadas |
++| POST /auth/login (servicio) | Usuario ausente/clave errónea/identidad válida | feliz/borde/error | dobles confirman una consulta exacta; cero verificaciones si ausente y una con contraseña original si existe |
++
++Última ejecución completa: **51 pruebas**, salida **0**, sin fallos/errores/
++omitidas. JaCoCo **205/208 líneas (98,56%)**; clases modificadas/agregadas
++de esta implementación: **100%**. Medición: contadores `LINE` de
++[jacoco.xml](../target/site/jacoco/jacoco.xml), sin acumulación (`append=false`),
++gate por clase >=85% en `mvn verify`.
+ 
+ ## Evidencia histórica previa a esta implementación
+ 
+--- a/docs/items/RESULTADOS.md
++++ b/docs/items/RESULTADOS.md
+@@ -130,3 +130,55 @@
+ global de seguridad en CI sigue pendiente de capacidad externa. No se
+ ejecutó CodeQL local, un scanner SCA completo ni un test contra servicios
+ externos; el árbol Maven no sustituye esos controles.
++
++## H-07
++
++- Baseline: `mvn "-Dtest=AuthServiceTest,AuthResourceTest,LegacyDatabaseTest,EndpointContractTest,HealthResourceTest" test`,
++  salida 0, 28 pruebas.
++- Corrección estructural antes de cualquier refactor:
++  `mvn "-Dtest=AuthServiceTest" test`, salida 0, 4 pruebas (3 nuevas con dobles).
++  **No hay rojo fingido:** la separación ya había sido introducida en H-02.
++  El plan autoriza cierre por evidencia sin refactor cosmético.
++- Después de la revisión, sin cambios de producción: `mvn verify`, salida 0,
++  51 pruebas, 0 fallos, 0 errores, 0 omitidas.
++- Resource solo valida/ensambla HTTP y DTOs; servicio consulta y verifica;
++  repositorio parametriza y mapea; migración tiene transacción propia;
++  hashing y firma están especializados. Métodos con responsabilidad definida,
++  retornos tempranos, helpers existentes sin duplicar hash/SQL y una fuente
++  de duración (`TokenService.EXPIRATION_SECONDS`). No se crearon capas vacías.
++- [Baseline](../../target/items/H-07-characterization-before.log),
++  [corrección antes, verde](../../target/items/H-07-correction-before.log),
++  [después](../../target/items/H-07-after.log), [diff](H-07.diff).
++
++## Cobertura y límites finales
++
++`mvn verify`, JDK 21, raíz del repositorio. JaCoCo 0.8.12, `append=false`,
++contador LINE y umbral 0.85 **por clase**, también para clases nuevas.
++XML/HTML: [jacoco.xml](../../target/site/jacoco/jacoco.xml) /
++[informe navegable](../../target/site/jacoco/index.html).
++
++| clase | líneas cubiertas/total | porcentaje |
++|---|---|---|
++| AuthResource | 24/24 | 100% |
++| AuthService | 10/10 | 100% |
++| LegacyDatabase | 42/42 | 100% |
++| TokenService | 25/25 | 100% |
++| CorsConfiguration | 10/10 | 100% |
++| AuthenticationPersistenceException | 2/2 | 100% |
++| PasswordHasher (sin modificar) | 28/30 | 93,33% |
++| PasswordMigration (sin modificar) | 58/59 | 98,31% |
++| DTOs/registros restantes | 6/6 | 100% |
++| Total producción | 205/208 | 98,56% |
++
++No se modificó código fuera de PLAN. Cambios contractuales limitados a JWT,
++CORS y errores autorizados; salud y otros campos permanecen. H-04 no
++duplica el secreto retirado y H-07 no exige modificaciones cosméticas.
++Dependency Review sigue pendiente de habilitación externa; no se bajaron
++CodeQL, Dependency Review ni JaCoCo. No se migró `data/`, no se usaron
++secretos reales y no se ejecutaron consumidores fuera del ámbito.
++
++Documentos consultados: [PLAN](../../PLAN.md),
++[HALLAZGOS](../../HALLAZGOS.md), [REGLAS](../../REGLAS.md),
++[GOOD_PRACTICES](../GOOD_PRACTICES.md), [ENDPOINTS](../ENDPOINTS.md),
++[TESTING](../TESTING.md), [README](../../README.md), más fuentes públicas
++oficiales citadas en H-06.
+--- a/src/test/java/com/bcp/workshop/auth/AuthServiceTest.java
++++ b/src/test/java/com/bcp/workshop/auth/AuthServiceTest.java
+@@ -5,6 +5,89 @@
+ import static org.junit.jupiter.api.Assertions.*;
+ 
+ class AuthServiceTest {
++    private static final UserRecord IDENTITY = new UserRecord(42, " exact user ", "Visible", "STUDENT");
++    private static final String ORIGINAL_PASSWORD = " original password ";
++    private static final String STORED_HASH = "test-double-hash-not-for-storage";
++
++    @Test
++    void missingUserDoesNotVerifyPassword() {
++        var hasher = new Verification(false);
++        var lookup = new Lookup(hasher, null);
++        var service = new AuthService(lookup, hasher, TestDatabase.tokens());
++
++        assertNull(service.authenticate(IDENTITY.username(), ORIGINAL_PASSWORD));
++        assertEquals(1, lookup.calls);
++        assertEquals(IDENTITY.username(), lookup.username);
++        assertEquals(0, hasher.calls);
++    }
++
++    @Test
++    void wrongPasswordVerifiesOriginalOnceAndReturnsNoIdentity() {
++        var hasher = new Verification(false);
++        var lookup = new Lookup(hasher, new StoredCredentials(IDENTITY, STORED_HASH));
++        var service = new AuthService(lookup, hasher, TestDatabase.tokens());
++
++        assertNull(service.authenticate(IDENTITY.username(), ORIGINAL_PASSWORD));
++        assertDelegation(lookup, hasher);
++    }
++
++    @Test
++    void matchingPasswordReturnsOnlyThePublicIdentity() {
++        var hasher = new Verification(true);
++        var lookup = new Lookup(hasher, new StoredCredentials(IDENTITY, STORED_HASH));
++        var service = new AuthService(lookup, hasher, TestDatabase.tokens());
++
++        assertSame(IDENTITY, service.authenticate(IDENTITY.username(), ORIGINAL_PASSWORD));
++        assertDelegation(lookup, hasher);
++    }
++
++    private void assertDelegation(Lookup lookup, Verification hasher) {
++        assertEquals(1, lookup.calls);
++        assertEquals(IDENTITY.username(), lookup.username);
++        assertEquals(1, hasher.calls);
++        assertEquals(ORIGINAL_PASSWORD, hasher.password);
++        assertEquals(STORED_HASH, hasher.hash);
++    }
++
++    private static class Lookup extends LegacyDatabase {
++        private final StoredCredentials credentials;
++        private int calls;
++        private String username;
++
++        Lookup(PasswordHasher hasher, StoredCredentials credentials) {
++            super("jdbc:sqlite:unused-test-double", hasher, new PasswordMigration(hasher),
++                    java.util.Optional.empty(), java.util.Optional.empty());
++            this.credentials = credentials;
++        }
++
++        @Override
++        StoredCredentials findByUsername(String username) {
++            calls++;
++            this.username = username;
++            return credentials;
++        }
++    }
++
++    private static class Verification extends PasswordHasher {
++        private final boolean matches;
++        private int calls;
++        private String password;
++        private String hash;
++
++        Verification(boolean matches) {
++            super(MIN_ITERATIONS);
++            this.matches = matches;
++        }
++
++        @Override
++        public boolean verify(String password, String encodedHash) {
++            calls++;
++            this.password = password;
++            this.hash = encodedHash;
++            return matches;
++        }
++    }
++
+     @Test
+     void authenticatesOnlyMatchingPasswordAndReturnsPublicIdentity() {
+         var database = TestDatabase.database();

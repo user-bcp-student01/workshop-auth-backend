@@ -1,0 +1,238 @@
+--- a/HALLAZGOS.md
++++ b/HALLAZGOS.md
+@@ -12,7 +12,7 @@
+ | H-01 | SQL: concatenación de credenciales | Vulnerabilidad | Originalmente ambas credenciales se concatenaban al SQL, permitiendo alterar el filtro. Resuelto con consultas e inserciones parametrizadas; la búsqueda actual usa el usuario literal y la contraseña se verifica fuera de SQL. Las tres regresiones fallaban antes y pasan después. | [LegacyDatabase.java:21](src/main/java/com/bcp/workshop/auth/LegacyDatabase.java#L21); [LegacyDatabase.java:52](src/main/java/com/bcp/workshop/auth/LegacyDatabase.java#L52); [LegacyDatabase.java:80](src/main/java/com/bcp/workshop/auth/LegacyDatabase.java#L80); [SqlCorrectionTest.java](src/test/java/com/bcp/workshop/auth/SqlCorrectionTest.java); [diff intermedio](docs/H-01.diff) | alta | Resuelto |
+ | H-02 | Datos: contraseñas en texto plano | Vulnerabilidad | Originalmente se insertaban y comparaban contraseñas planas. Resuelto en código mediante PBKDF2-HMAC-SHA256 con salt aleatorio individual, coste configurable y migración transaccional/idempotente a `password_hash`, sin fallback plano. Conserva identidades y no expone hashes en respuesta. Se verificó solo con bases aisladas: la base real no se migró durante este trabajo y sus restos/copias requieren manejo autorizado. | [PasswordHasher.java:33](src/main/java/com/bcp/workshop/auth/PasswordHasher.java#L33); [PasswordHasher.java:40](src/main/java/com/bcp/workshop/auth/PasswordHasher.java#L40); [PasswordMigration.java:29](src/main/java/com/bcp/workshop/auth/PasswordMigration.java#L29); [AuthService.java:17](src/main/java/com/bcp/workshop/auth/AuthService.java#L17); [PasswordStorageTest.java](src/test/java/com/bcp/workshop/auth/PasswordStorageTest.java); [PasswordMigrationTest.java](src/test/java/com/bcp/workshop/auth/PasswordMigrationTest.java) | alta | Resuelto |
+ | H-03 | Token: Base64 con secreto embebido | Vulnerabilidad | Resuelto con JWT RS256, claims acordados, expiración 3600 s y clave RSA externa; transición confirmada por el usuario. `TokenContractTest` falla antes y pasa después; `TokenServiceTest` verifica firma, alteración, expiración y configuración. | [TokenService.java](src/main/java/com/bcp/workshop/auth/TokenService.java); [TokenServiceTest.java](src/test/java/com/bcp/workshop/auth/TokenServiceTest.java); [diff H-03](docs/items/H-03.diff) | alta | Resuelto |
+-| H-04 | Configuración: secreto fijo y CORS permisivo | Vulnerabilidad | El secreto del token continúa fijo en Java y CORS permite cualquier origen. No se modificaron estas políticas. CORS ya reside en configuración; no se afirma que no sea sobrescribible ni que permita cookies con credenciales. | [LegacyTokenUtil.java:9](src/main/java/com/bcp/workshop/auth/LegacyTokenUtil.java#L9); [application.properties:4](src/main/resources/application.properties#L4); [application.properties:5](src/main/resources/application.properties#L5) | alta | Pendiente |
++| H-04 | Configuración: secreto fijo y CORS permisivo | Vulnerabilidad | Resuelto: H-03 retiró el secreto legado; CORS ahora limita orígenes externos explícitos, GET/POST y headers necesarios, con validación al iniciar. `CorsConfigurationTest` pasa tras 2 fallos previos; `CorsValidationTest` rechaza configuración inválida. | [CorsConfiguration.java](src/main/java/com/bcp/workshop/auth/CorsConfiguration.java); [application.properties](src/main/resources/application.properties); [diff H-04](docs/items/H-04.diff) | alta | Resuelto |
+ | H-05 | Errores: respuesta expone detalles internos | Vulnerabilidad | HTTP 500 conserva mensaje y clase de la excepción para no cambiar el contrato. Ahora existe logging de servidor, pero no se corrigió la exposición al cliente. Los fallos SQL de consulta siguen registrándose y retornando `null`, que termina en HTTP 401. | [AuthResource.java:39](src/main/java/com/bcp/workshop/auth/AuthResource.java#L39); [LegacyDatabase.java:61](src/main/java/com/bcp/workshop/auth/LegacyDatabase.java#L61) | media | Pendiente |
+ | H-06 | SCA: Quarkus `3.27.4` y Commons Text `1.9` presentes | Sugerencia | Las versiones siguen declaradas y se mantiene `escapeHtml4`. No se investigaron advisories ni se ejecutaron scanners, por lo que no se confirma un CVE. Severidad media de priorización de investigación, no calificación CVE. | [pom.xml:13](pom.xml#L13); [pom.xml:49](pom.xml#L49); [pom.xml:50](pom.xml#L50); [AuthResource.java:62](src/main/java/com/bcp/workshop/auth/AuthResource.java#L62) | media | Pendiente |
+ | H-07 | Clean code: Resource concentra responsabilidades | Refactor | La separación mínima necesaria para H-02 introdujo servicio, repositorio, hasher y migración; Resource conserva validación y mapeo HTTP con retornos tempranos, DTOs propios y duración compartida. No se cierra este ID fuera de la selección aprobada; queda pendiente su revisión específica, sin afirmar que el código mantiene intacta la concentración original. | [AuthResource.java:27](src/main/java/com/bcp/workshop/auth/AuthResource.java#L27); [AuthResource.java:60](src/main/java/com/bcp/workshop/auth/AuthResource.java#L60); [AuthService.java](src/main/java/com/bcp/workshop/auth/AuthService.java); [LegacyDatabase.java](src/main/java/com/bcp/workshop/auth/LegacyDatabase.java) | baja | Pendiente |
+--- a/README.md
++++ b/README.md
+@@ -115,7 +115,7 @@
+ 
+ Históricamente H-03 conservó el formato legado. La implementación aprobada
+ posteriormente lo sustituye por JWT RS256 (ver sección siguiente).
+-H-04, H-05 y H-06 aún no fueron corregidos en este paso;
++H-05 y H-06 aún no fueron corregidos en este paso;
+ se mantienen los errores HTTP documentados, incluido el 401 ante fallo de
+ consulta. H-07 no se cierra fuera del alcance aprobado.
+ 
+@@ -132,3 +132,11 @@
+ Deben recibir solo la clave pública por un canal acordado y verificar esos
+ valores; no reutilizar la constante de laboratorio eliminada. La aceptación
+ externa es confirmación humana, no una prueba ejecutada en otros repositorios.
++
++## H-04: política CORS explícita
++
++`AUTH_CORS_ORIGINS` admite orígenes HTTP(S) explícitos separados por comas,
++sin rutas, usuarios, query ni fragmentos; predeterminado
++`http://localhost:4200`. Una lista vacía o inválida impide iniciar.
++Solo se autorizan GET/POST y headers accept, authorization, content-type.
++No existe secreto legado que externalizar: H-03 ya eliminó ese emisor.
+--- a/docs/ENDPOINTS.md
++++ b/docs/ENDPOINTS.md
+@@ -199,9 +199,14 @@
+ - HTTP 500 aún expone clase y mensaje internos; no mostrar indiscriminadamente
+   esos detalles a usuarios finales. El 401 ante fallo SQL puede ocultar una
+   incidencia de infraestructura.
+-- CORS sigue habilitado para cualquier origen (`/.*/`), con métodos
+-  `GET,POST,PUT,DELETE,OPTIONS` y cabeceras
+-  `accept,authorization,content-type,x-requested-with`.
++- CORS permite por defecto solo `http://localhost:4200`, métodos `GET,POST`
++  y cabeceras `accept,authorization,content-type`. Se configura una lista
++  de orígenes explícitos separados por comas mediante `AUTH_CORS_ORIGINS`;
++  comodines, expresiones regulares, lista vacía y URLs con rutas fallan
++  al iniciar. Los preflight `OPTIONS` son gestionados por el middleware.
++  Un origen/método/header rechazado no obtiene permiso CORS; el cliente no
++  debe depender de un código HTTP concreto para diagnosticarlo.
++  CORS no sustituye autenticación ni protege clientes que no sean navegadores.
+ - Ejecución exclusivamente local y aislada; no enviar credenciales reales.
+   La configuración predeterminada no proporciona HTTPS. El host normal es
+   `127.0.0.1`; el perfil de producción configura `0.0.0.0`.
+--- a/docs/TESTING.md
++++ b/docs/TESTING.md
+@@ -1,4 +1,20 @@
+ # Pruebas de los endpoints
++
++## Implementación aprobada H-03 a H-07
++
++Los resultados, comandos, salidas y diffs actuales están en
++[items/RESULTADOS.md](items/RESULTADOS.md). Las secciones siguientes conservan
++la caracterización histórica de 39 pruebas: sus snippets/resultados no
++describen las correcciones posteriores de token, CORS y errores.
++La fuente ejecutable actual es [el directorio de tests](../src/test/java/com/bcp/workshop/auth/).
++
++| endpoint | caso | tipo | resultado esperado |
++|---|---|---|---|
++| POST /auth/login | JWT, claims y firma | feliz/borde/error | 200; firma RS256 verificable; verificador rechaza alteración, clave errónea y vencimiento |
++| POST /auth/login | CORS local/origen ajeno/método/header | feliz/borde/error | permisos solo para origen y valores configurados |
++| POST /auth/login | Sin Origin | feliz | 200 sin requisito nuevo de autenticación |
++
++## Evidencia histórica previa a esta implementación
+ 
+ Ejecución real: 2026-10-19. Contrato de referencia:
+ [ENDPOINTS.md](ENDPOINTS.md). Meta: [REGLAS.md](../REGLAS.md), cobertura
+--- a/docs/items/RESULTADOS.md
++++ b/docs/items/RESULTADOS.md
+@@ -24,3 +24,19 @@
+ - Evidencia: [antes](../../target/items/H-03-characterization-before.log),
+   [rojo](../../target/items/H-03-correction-before.log),
+   [verde](../../target/items/H-03-after.log), [diff](H-03.diff).
++
++## H-04
++
++- Caracterización: `mvn "-Dtest=TokenContractTest,EndpointContractTest,HealthResourceTest" test`,
++  salida 0 (16 pruebas). Corrección antes:
++  `mvn "-Dtest=CorsConfigurationTest" test`, salida 1: 4 pruebas, 2 fallos
++  por permiso a origen ajeno y método DELETE.
++- Después: `mvn verify`, salida 0, 47 pruebas sin fallos; gate JaCoCo >=85%
++  por clase satisfecho, incluida `CorsConfiguration`.
++- Validación aislada de listas vacías, wildcard, regex y URLs inválidas;
++  los mismos validadores se ejecutan al iniciar mediante `@Startup`.
++  No se afirma haber iniciado un proceso por cada configuración inválida.
++- No se reintrodujo el secreto legado retirado en H-03.
++- [Caracterización](../../target/items/H-04-characterization-before.log),
++  [rojo](../../target/items/H-04-correction-before.log),
++  [verde](../../target/items/H-04-after.log), [diff](H-04.diff).
+--- a/pom.xml
++++ b/pom.xml
+@@ -121,6 +121,7 @@
+                                         <include>com.bcp.workshop.auth.LegacyDatabase</include>
+                                         <include>com.bcp.workshop.auth.LegacyTokenUtil</include>
+                                         <include>com.bcp.workshop.auth.TokenService</include>
++                                        <include>com.bcp.workshop.auth.CorsConfiguration</include>
+                                         <include>com.bcp.workshop.auth.PasswordHasher</include>
+                                         <include>com.bcp.workshop.auth.PasswordMigration</include>
+                                         <include>com.bcp.workshop.auth.StoredCredentials</include>
+--- /dev/null
++++ b/src/main/java/com/bcp/workshop/auth/CorsConfiguration.java
+@@ -0,0 +1,28 @@
++package com.bcp.workshop.auth;
++
++import io.quarkus.runtime.Startup;
++import jakarta.enterprise.context.ApplicationScoped;
++import jakarta.inject.Inject;
++import org.eclipse.microprofile.config.inject.ConfigProperty;
++
++import java.net.URI;
++
++@Startup
++@ApplicationScoped
++public class CorsConfiguration {
++    @Inject
++    public CorsConfiguration(@ConfigProperty(name = "auth.cors.origins") String origins) {
++        for (String origin : origins.split(",", -1)) {
++            validateOrigin(origin.trim());
++        }
++    }
++
++    private void validateOrigin(String origin) {
++        URI uri = URI.create(origin);
++        if (!("http".equals(uri.getScheme()) || "https".equals(uri.getScheme()))
++                || uri.getHost() == null || uri.getUserInfo() != null
++                || !uri.getPath().isEmpty() || uri.getQuery() != null || uri.getFragment() != null) {
++            throw new IllegalArgumentException("CORS origins must be explicit HTTP(S) origins without paths");
++        }
++    }
++}
+--- a/src/main/resources/application.properties
++++ b/src/main/resources/application.properties
+@@ -2,9 +2,10 @@
+ quarkus.http.host=127.0.0.1
+ %prod.quarkus.http.host=0.0.0.0
+ quarkus.http.cors.enabled=true
+-quarkus.http.cors.origins=/.*/
+-quarkus.http.cors.methods=GET,POST,PUT,DELETE,OPTIONS
+-quarkus.http.cors.headers=accept,authorization,content-type,x-requested-with
++auth.cors.origins=${AUTH_CORS_ORIGINS:http://localhost:4200}
++quarkus.http.cors.origins=${auth.cors.origins}
++quarkus.http.cors.methods=GET,POST
++quarkus.http.cors.headers=accept,authorization,content-type
+ quarkus.jackson.fail-on-unknown-properties=false
+ auth.db.url=${AUTH_DB_URL:jdbc:sqlite:./data/workshop.db}
+ auth.password.iterations=${AUTH_PASSWORD_ITERATIONS:600000}
+--- /dev/null
++++ b/src/test/java/com/bcp/workshop/auth/CorsConfigurationTest.java
+@@ -0,0 +1,53 @@
++package com.bcp.workshop.auth;
++
++import io.quarkus.test.junit.QuarkusTest;
++import org.junit.jupiter.api.Test;
++
++import java.util.Map;
++
++import static io.restassured.RestAssured.given;
++import static org.hamcrest.Matchers.*;
++
++@QuarkusTest
++class CorsConfigurationTest {
++    private static final String LOCAL = "http://localhost:4200";
++    private static final String FOREIGN = "https://untrusted.example";
++
++    @Test
++    void allowsLocalPreflightWithNecessaryHeaders() {
++        given().header("Origin", LOCAL).header("Access-Control-Request-Method", "POST")
++                .header("Access-Control-Request-Headers", "content-type,authorization")
++                .options("/auth/login").then()
++                .header("Access-Control-Allow-Origin", is(LOCAL))
++                .header("Access-Control-Allow-Methods", containsString("POST"))
++                .header("Access-Control-Allow-Headers", containsString("content-type"))
++                .header("Access-Control-Allow-Headers", containsString("authorization"));
++    }
++
++    @Test
++    void deniesForeignOrigin() {
++        given().header("Origin", FOREIGN).header("Access-Control-Request-Method", "POST")
++                .options("/auth/login").then().header("Access-Control-Allow-Origin", nullValue());
++        given().header("Origin", FOREIGN).contentType("application/json")
++                .body(Map.of("username", "student", "password", "Workshop123!"))
++                .post("/auth/login").then().header("Access-Control-Allow-Origin", nullValue());
++    }
++
++    @Test
++    void deniesUnnecessaryMethodsAndHeaders() {
++        given().header("Origin", LOCAL).header("Access-Control-Request-Method", "DELETE")
++                .options("/auth/login").then()
++                .header("Access-Control-Allow-Methods", not(containsString("DELETE")));
++        given().header("Origin", LOCAL).header("Access-Control-Request-Method", "POST")
++                .header("Access-Control-Request-Headers", "x-not-allowed")
++                .options("/auth/login").then()
++                .header("Access-Control-Allow-Headers", not(containsString("x-not-allowed")));
++    }
++
++    @Test
++    void preservesLoginWithoutOrigin() {
++        given().contentType("application/json")
++                .body(Map.of("username", "student", "password", "Workshop123!"))
++                .post("/auth/login").then().statusCode(200).body("user.username", is("student"));
++    }
++}
+--- /dev/null
++++ b/src/test/java/com/bcp/workshop/auth/CorsValidationTest.java
+@@ -0,0 +1,23 @@
++package com.bcp.workshop.auth;
++
++import org.junit.jupiter.api.Test;
++
++import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
++import static org.junit.jupiter.api.Assertions.assertThrows;
++
++class CorsValidationTest {
++    @Test
++    void acceptsExplicitOriginLists() {
++        assertDoesNotThrow(() -> new CorsConfiguration("http://localhost:4200, https://allowed.example"));
++    }
++
++    @Test
++    void rejectsEmptyWildcardRegexAndNonOriginValues() {
++        for (String value : new String[]{"", " ", "*", "/.*/", "null", "file:///tmp",
++                "https://example.com/path", "https://user@example.com",
++                "https://example.com?q=x", "https://example.com#fragment",
++                "http://localhost:4200,", "https://["}) {
++            assertThrows(IllegalArgumentException.class, () -> new CorsConfiguration(value), value);
++        }
++    }
++}

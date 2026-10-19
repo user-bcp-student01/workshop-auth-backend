@@ -1,0 +1,171 @@
+--- a/HALLAZGOS.md
++++ b/HALLAZGOS.md
+@@ -14,7 +14,7 @@
+ | H-03 | Token: Base64 con secreto embebido | Vulnerabilidad | Resuelto con JWT RS256, claims acordados, expiración 3600 s y clave RSA externa; transición confirmada por el usuario. `TokenContractTest` falla antes y pasa después; `TokenServiceTest` verifica firma, alteración, expiración y configuración. | [TokenService.java](src/main/java/com/bcp/workshop/auth/TokenService.java); [TokenServiceTest.java](src/test/java/com/bcp/workshop/auth/TokenServiceTest.java); [diff H-03](docs/items/H-03.diff) | alta | Resuelto |
+ | H-04 | Configuración: secreto fijo y CORS permisivo | Vulnerabilidad | Resuelto: H-03 retiró el secreto legado; CORS ahora limita orígenes externos explícitos, GET/POST y headers necesarios, con validación al iniciar. `CorsConfigurationTest` pasa tras 2 fallos previos; `CorsValidationTest` rechaza configuración inválida. | [CorsConfiguration.java](src/main/java/com/bcp/workshop/auth/CorsConfiguration.java); [application.properties](src/main/resources/application.properties); [diff H-04](docs/items/H-04.diff) | alta | Resuelto |
+ | H-05 | Errores: respuesta expone detalles internos | Vulnerabilidad | Resuelto: excepción de persistencia con causa y un único log en Resource; SQL y fallos internos responden 500 genérico sin clase ni detalles. Las pruebas de Resource, repositorio, HTTP y salud pasan tras 5 fallos esperados antes del cambio. | [AuthenticationPersistenceException.java](src/main/java/com/bcp/workshop/auth/AuthenticationPersistenceException.java); [AuthResourceTest.java](src/test/java/com/bcp/workshop/auth/AuthResourceTest.java); [diff H-05](docs/items/H-05.diff) | media | Resuelto |
+-| H-06 | SCA: Quarkus `3.27.4` y Commons Text `1.9` presentes | Sugerencia | Las versiones siguen declaradas y se mantiene `escapeHtml4`. No se investigaron advisories ni se ejecutaron scanners, por lo que no se confirma un CVE. Severidad media de priorización de investigación, no calificación CVE. | [pom.xml:13](pom.xml#L13); [pom.xml:49](pom.xml#L49); [pom.xml:50](pom.xml#L50); [AuthResource.java:62](src/main/java/com/bcp/workshop/auth/AuthResource.java#L62) | media | Pendiente |
++| H-06 | SCA: Quarkus `3.27.4` y Commons Text `1.9` presentes | Sugerencia | Resuelto el análisis y actualización: BOM/plugin 3.27.6.1 y Commons Text 1.10.0, con advisories oficiales y comparación de coordenadas antes/después. Escape y contratos pasan; no se afirma explotación ni scanner completo: Dependency Review externo está bloqueado por configuración del repositorio. | [pom.xml](pom.xml); [evidencia y límites H-06](docs/items/RESULTADOS.md#h-06); [diff H-06](docs/items/H-06.diff) | media | Resuelto |
+ | H-07 | Clean code: Resource concentra responsabilidades | Refactor | La separación mínima necesaria para H-02 introdujo servicio, repositorio, hasher y migración; Resource conserva validación y mapeo HTTP con retornos tempranos, DTOs propios y duración compartida. No se cierra este ID fuera de la selección aprobada; queda pendiente su revisión específica, sin afirmar que el código mantiene intacta la concentración original. | [AuthResource.java:27](src/main/java/com/bcp/workshop/auth/AuthResource.java#L27); [AuthResource.java:60](src/main/java/com/bcp/workshop/auth/AuthResource.java#L60); [AuthService.java](src/main/java/com/bcp/workshop/auth/AuthService.java); [LegacyDatabase.java](src/main/java/com/bcp/workshop/auth/LegacyDatabase.java) | baja | Pendiente |
+ 
+ ## Flujo actual
+--- a/README.md
++++ b/README.md
+@@ -115,7 +115,7 @@
+ 
+ Históricamente H-03 conservó el formato legado. La implementación aprobada
+ posteriormente lo sustituye por JWT RS256 (ver sección siguiente).
+-H-06 aún no fue corregido en este paso;
++La investigación y actualización posterior H-06 se documentan al final;
+ se mantienen los errores HTTP documentados, incluido el 401 ante fallo de
+ consulta. H-07 no se cierra fuera del alcance aprobado.
+ 
+@@ -148,3 +148,15 @@
+ una vez la excepción sin request ni credenciales y responde
+ `500 {"message":"Internal server error"}`. No cambia errores de validación
+ o deserialización ni incorpora un mapper global.
++
++## H-06: dependencias investigadas
++
++BOM y plugin Quarkus alineados en 3.27.6.1 (parche de la misma línea LTS),
++Commons Text 1.10.0 (mínima corrección publicada para CVE-2022-42889).
++Se conserva `escapeHtml4`: no usa la interpolación vulnerable.
++Los rangos oficiales, condiciones de aplicabilidad, árboles resueltos y
++regresión están en [resultados H-06](docs/items/RESULTADOS.md#h-06).
++Dependency Review de GitHub falla por falta de soporte/configuración de
++Dependency graph en el repositorio; el responsable externo debe habilitarlo
++y reejecutarlo. No se modificaron workflows ni se sustituyó ese gate por
++la comparación local. No se declara ausencia global de vulnerabilidades.
+--- a/docs/TESTING.md
++++ b/docs/TESTING.md
+@@ -15,6 +15,7 @@
+ | POST /auth/login | Sin Origin | feliz | 200 sin requisito nuevo de autenticación |
+ | POST /auth/login | SQL inaccesible/hash inválido/excepción sin mensaje | error | 500 `{"message":"Internal server error"}`; causa solo en servidor |
+ | POST /auth/login | Contraseña incorrecta/entrada inválida/rechazo framework | error | 401/400/405/406/415 previos intactos |
++| POST /auth/login | Escape de &, <, >, comillas, Unicode y entidades previas | borde | salida HTML4 exacta conservada con las dependencias actualizadas |
+ 
+ ## Evidencia histórica previa a esta implementación
+ 
+--- a/docs/items/RESULTADOS.md
++++ b/docs/items/RESULTADOS.md
+@@ -56,3 +56,77 @@
+ - [Antes](../../target/items/H-05-characterization-before.log),
+   [rojo](../../target/items/H-05-correction-before.log),
+   [verde](../../target/items/H-05-after.log), [diff](H-05.diff).
++
++## H-06
++
++### Investigación y decisión
++
++Fuentes oficiales consultadas el 2026-10-19:
++
++- [Apache Commons Text: CVE-2022-42889](https://commons.apache.org/proper/commons-text/security.html):
++  versiones anteriores a 1.10.0; requiere `StringSubstitutor` con entrada
++  no confiable y sin saneamiento. Este backend solo llama `escapeHtml4`;
++  no se ha demostrado explotación ni RCE en esta aplicación. Actualizar
++  1.9 a la mínima corrección 1.10.0 elimina esa coordenada afectada.
++- [GHSA-xrmg-9xc7-83fp / CVE-2026-16308](https://github.com/quarkusio/quarkus/security/advisories/GHSA-xrmg-9xc7-83fp):
++  RESTEasy Reactive presente en 3.27.4; parche de la línea 3.27 en 3.27.5.1.
++  Requiere endpoint multipart, que no existe en el contrato JSON de este
++  backend. Se corrige la dependencia preventivamente, sin afirmar DoS probado.
++- [GHSA-qcxp-gm7m-4j5v / CVE-2026-50559](https://github.com/quarkusio/quarkus/security/advisories/GHSA-qcxp-gm7m-4j5v):
++  `quarkus-vertx-http` presente, normalización de rutas con políticas HTTP.
++  El advisory enumera 3.27.4.1/3.27.5 entre versiones corregidas. Este backend
++  no configura políticas por ruta y sus dos endpoints son públicos; no se
++  afirma bypass de autenticación demostrado.
++- Se contrastaron también los otros avisos del JSON oficial consultado:
++  Qute, Spring Web, OIDC y WebSockets Next no aparecen como extensiones usadas;
++  los de worker starvation (CVE-2025-66560) y contexto duplicado
++  (CVE-2025-49574) ya tienen correcciones anteriores a 3.27.4 en esta línea.
++  No se presenta esta consulta acotada como inventario exhaustivo de CVEs.
++- [Release oficial Quarkus 3.27.6.1](https://github.com/quarkusio/quarkus/releases/tag/3.27.6.1)
++  y [metadata de Central](https://repo.maven.apache.org/maven2/io/quarkus/platform/quarkus-bom/maven-metadata.xml):
++  seleccionado el último parche publicado de la misma línea 3.27 LTS,
++  no salto de versión menor/mayor ni override aislado de transitivas.
++  BOM y plugin comparten la propiedad. No se infiere un changelog de la
++  página de blog 3.27.6.1 (no existe: HTTP 404); se verificó el release.
++
++### Comandos y resultados reales
++
++1. `mvn dependency:tree "-DoutputFile=target\items\H-06-tree-before.txt"`:
++   salida 0, Commons Text 1.9, Quarkus HTTP/REST 3.27.4.
++2. `mvn "-Dtest=AuthResourceTest,EndpointContractTest,HealthResourceTest,TokenContractTest,CorsConfigurationTest" test`:
++   salida 0, 27 pruebas con dependencias anteriores, incluido nuevo caso
++   exacto de escape. Apostrofe permanece literal y entidades previas se
++   vuelven a escapar; no se corrige ese comportamiento como efecto lateral.
++3. `python target\items\verify-dependencies.py target\items\H-06-tree-before.txt`:
++   salida 1, no cumple coordenadas corregidas. Esta prueba compara versiones
++   resueltas y alineación del manifiesto; no ejecuta un exploit ni un scanner.
++4. Después del manifiesto: `mvn verify`, salida 0, 48 pruebas sin fallos,
++   mismo contrato y gate JaCoCo >=85% por clase.
++5. `mvn dependency:tree "-DoutputFile=target\items\H-06-tree-after.txt"`:
++   salida 0; repetir script sobre ese árbol: salida 0, Commons Text 1.10.0,
++   HTTP/REST 3.27.6.1 y BOM/plugin alineados. Se volvió a consultar el JSON
++   de advisories oficiales. Rangos y versiones se interpretan por línea LTS,
++   no como comparación textual de todos los rangos agregados por GitHub.
++6. `gh run list --limit 5 --json databaseId,name,conclusion,status`:
++   consulta real de ejecuciones ya existentes, no de estos cambios locales.
++   CodeQL figura completado con éxito; esto no demuestra ausencia de alertas.
++   `gh run view 39294998103 --log-failed` confirma Dependency Review:
++   "Dependency review is not supported on this repository. Please ensure
++   that Dependency graph is enabled". Requiere al administrador externo
++   habilitarlo y reejecutar. No se deshabilitó ni se atribuye éxito al gate.
++
++Evidencia local: [árbol antes](../../target/items/H-06-tree-before.txt),
++[árbol después](../../target/items/H-06-tree-after.txt),
++[caracterización](../../target/items/H-06-characterization-before.log),
++[comparación roja](../../target/items/H-06-correction-before.log),
++[comparación verde](../../target/items/H-06-correction-after.log),
++[verify](../../target/items/H-06-after.log),
++[avisos oficiales](../../target/items/H-06-quarkus-advisories.json),
++[avisos reconsultados](../../target/items/H-06-quarkus-advisories-after.json),
++[Dependency Review](../../target/items/H-06-dependency-review.log),
++[diff](H-06.diff).
++
++**Límite:** la investigación solicitada queda atendida, pero la comprobación
++global de seguridad en CI sigue pendiente de capacidad externa. No se
++ejecutó CodeQL local, un scanner SCA completo ni un test contra servicios
++externos; el árbol Maven no sustituye esos controles.
+--- a/pom.xml
++++ b/pom.xml
+@@ -10,7 +10,7 @@
+         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+         <quarkus.platform.group-id>io.quarkus.platform</quarkus.platform.group-id>
+         <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
+-        <quarkus.platform.version>3.27.4</quarkus.platform.version>
++        <quarkus.platform.version>3.27.6.1</quarkus.platform.version>
+         <surefire-plugin.version>3.5.4</surefire-plugin.version>
+     </properties>
+ 
+@@ -51,7 +51,7 @@
+         <dependency>
+             <groupId>org.apache.commons</groupId>
+             <artifactId>commons-text</artifactId>
+-            <version>1.9</version>
++            <version>1.10.0</version>
+         </dependency>
+         <dependency>
+             <groupId>io.quarkus</groupId>
+--- a/src/test/java/com/bcp/workshop/auth/AuthResourceTest.java
++++ b/src/test/java/com/bcp/workshop/auth/AuthResourceTest.java
+@@ -92,6 +92,20 @@
+     }
+ 
+     @Test
++    void preservesExactHtml4EscapingAcrossDependencyUpdates() throws Exception {
++        TestDatabase.insert("escape-contract", "test-only", "&<>\"' Ω中文 &amp;", "STUDENT");
++        given().contentType("application/json")
++                .body(Map.of("username", "escape-contract", "password", "test-only"))
++                .post("/auth/login").then().statusCode(200)
++                .body("$", aMapWithSize(4)).body("user", aMapWithSize(3))
++                .body("user.username", is("escape-contract"))
++                .body("user.displayName", is("&amp;&lt;&gt;&quot;' &Omega;中文 &amp;amp;"))
++                .body("user.role", is("STUDENT"))
++                .body("expiresIn", is(3600)).body("token", notNullValue())
++                .body("debug", is("authenticated-with-legacy-flow"));
++    }
++
++    @Test
+     void hidesExceptionDetailsAndLogsCauseOnceWithoutRequestSecrets() {
+         for (String message : new String[]{"test failure", null}) {
+             var records = new java.util.ArrayList<java.util.logging.LogRecord>();
