@@ -30,8 +30,8 @@ Proporciona la información en este formato:
 ## 3) Output
 Devuelve **solo** un documento Markdown con estas secciones y bullets:
 
-1. **Summary**
-2. **Scope**
+1. **Resumen**
+2. **Alcance**
     - Dentro del alcance
     - Fuera del alcance
 3. **Supuestos**
@@ -75,3 +75,6 @@ Adjunta o referencia estos elementos en el PR o entrega:
 - `examples/input.sample.md`.
 - `examples/output.sample.md`.
 - Tag de versión para el Skill, como `skill-feature-intake-v0.1.0`.
+
+## 7) Idioma de salida 
+Genera todo el documento en español, independientemente del idioma de la entrada o de la solicitud. Usa títulos y contenido en español. Conserva sin traducir nombres de APIs, claims, identificadores y variables de configuración.
