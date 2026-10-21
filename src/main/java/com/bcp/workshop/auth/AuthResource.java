@@ -11,13 +11,19 @@ import org.apache.commons.text.StringEscapeUtils;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.logging.Logger;
 
 @Path("/auth")
 @Consumes(MediaType.APPLICATION_JSON)
 @Produces(MediaType.APPLICATION_JSON)
 public class AuthResource {
+    private static final Logger LOGGER = Logger.getLogger(AuthResource.class.getName());
+
     @Inject
     LegacyDatabase database;
+
+    @Inject
+    TokenService tokenService;
 
     @POST
     @Path("/login")
@@ -32,14 +38,18 @@ public class AuthResource {
                     if (request.password == null || request.password.trim().isEmpty()) {
                         return Response.status(400).entity(Map.of("message", "Password is required")).build();
                     } else {
+                        if (request.client == null || request.client.trim().isEmpty()) {
+                            return Response.status(400).entity(Map.of("message", "Client is required")).build();
+                        }
                         UserRecord user = database.findByCredentials(request.username, request.password);
                         if (user == null) {
                             return Response.status(401).entity(Map.of("message", "Invalid user " + request.username + " or password")).build();
                         } else {
-                            String token = LegacyTokenUtil.create(user.username(), user.role());
+                            TokenService.IssuedToken issuedToken = tokenService.issue(
+                                    user.username(), user.role(), request.client);
                             Map<String, Object> response = new HashMap<>();
-                            response.put("token", token);
-                            response.put("expiresIn", 3600);
+                            response.put("token", issuedToken.value());
+                            response.put("expiresIn", issuedToken.expiresIn());
                             response.put("user", Map.of(
                                     "username", user.username(),
                                     "displayName", StringEscapeUtils.escapeHtml4(user.displayName()),
@@ -52,10 +62,8 @@ public class AuthResource {
                 }
             }
         } catch (Exception error) {
-            return Response.status(500).entity(Map.of(
-                    "message", error.getMessage() == null ? "Unknown error" : error.getMessage(),
-                    "exception", error.getClass().getName()
-            )).build();
+            LOGGER.warning("Authentication request failed");
+            return Response.status(500).entity(Map.of("message", "Internal server error")).build();
         }
     }
 }

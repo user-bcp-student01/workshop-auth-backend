@@ -37,7 +37,7 @@ public class LegacyDatabase {
                 return new UserRecord(result.getLong("id"), result.getString("username"), result.getString("display_name"), result.getString("role"));
             }
         } catch (Exception error) {
-            error.printStackTrace();
+            throw new IllegalStateException("Unable to query credentials");
         }
         return null;
     }

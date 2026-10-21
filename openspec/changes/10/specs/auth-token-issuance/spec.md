@@ -83,4 +83,4 @@ El sistema SHALL documentar explícitamente la configuración de firma que admit
 - **WHEN** se documenta o ejecuta el servicio fuera del sandbox
 - **THEN** la configuración necesaria para firmar tokens está descrita explícitamente
 - **AND** no se usa silenciosamente un valor predeterminado de firma
-- **AND** la discrepancia del Issue entre HMAC/`AUTH_TOKEN_SECRET` y el baseline RSA/`AUTH_TOKEN_PRIVATE_KEY` queda pendiente de decisión técnica, no aprobada como cambio de algoritmo por esta especificación
+- **AND** la discrepancia del Issue entre HMAC/`AUTH_TOKEN_SECRET` y el baseline RSA/`AUTH_TOKEN_PRIVATE_KEY` se resuelve para este cambio preservando RS256 y `AUTH_TOKEN_PRIVATE_KEY`; no se adopta HMAC ni se cambia el algoritmo documentado

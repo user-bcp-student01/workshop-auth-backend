@@ -10,7 +10,10 @@ Quarkus. No presupone el comportamiento de otros componentes.
 - Requisitos: JDK 21, Maven 3.9+ y directorio padre de la base SQLite existente.
 - `AUTH_TOKEN_PRIVATE_KEY` es obligatorio: ruta a una clave privada RSA
   PKCS#8 PEM de al menos 2048 bits, externa al repositorio. No hay fallback
-  de token legado. Emisor `workshop-auth-backend`, audiencia `workshop-api`.
+  de token legado. La propiedad Quarkus correspondiente es
+  `auth.token.private-key`; la aplicación falla al iniciar si falta o no se
+  puede cargar una clave válida. Emisor `workshop-auth-backend`, audiencia
+  `workshop-api`.
 - Para crear una base nueva se deben configurar
   `AUTH_SEED_STUDENT_PASSWORD` y `AUTH_SEED_TRAINER_PASSWORD`. Los ejemplos de
   login de este documento suponen los valores de laboratorio
@@ -40,7 +43,7 @@ Autentica a un usuario del laboratorio con sus credenciales y entrega su
 identidad y un token para continuar el flujo de la aplicación.
 
 Fuente: [AuthResource.login](../src/main/java/com/bcp/workshop/auth/AuthResource.java#L27)
-y [AuthService.authenticate](../src/main/java/com/bcp/workshop/auth/AuthService.java#L17).
+y [TokenService.issue](../src/main/java/com/bcp/workshop/auth/TokenService.java).
 
 ### 2. Autenticación y headers
 
@@ -69,7 +72,7 @@ Objeto JSON:
 |---|---|---|---|
 | `username` | string | Sí | Usuario exacto a buscar. No admite `null`, cadena vacía ni solo caracteres que elimina `String.trim()`. No se recorta ni normaliza antes de autenticar. |
 | `password` | string | Sí | Contraseña exacta. Misma comprobación de vacío que el usuario; espacios significativos se conservan. Se verifica contra el hash almacenado, no mediante SQL. El código no impone el límite de 72 bytes de BCrypt. |
-| `client` | string o `null` | No | Identificador del cliente. Se recibe pero no se valida ni se usa para autenticar o generar el token. |
+| `client` | string | Sí | Identificador del cliente. Debe contener algún carácter que no elimine `String.trim()`. La validación no normaliza el valor aceptado; se refleja exactamente en el claim `client`. |
 
 Ejemplo completo para una base sembrada con las credenciales indicadas:
 
@@ -83,12 +86,13 @@ Ejemplo completo para una base sembrada con las credenciales indicadas:
 
 Se aceptan propiedades JSON adicionales por configuración. El orden de
 validación es cuerpo nulo, usuario y contraseña; si fallan ambos campos se
-responde primero por el usuario. Omitir `client` no cambia el resultado.
-Las entradas de tipo incorrecto quedan sujetas a Jackson: no se garantiza
-conversión de números, booleanos, arrays u objetos a string.
+responde primero por el usuario. Después se valida `client`; omitirlo, enviarlo
+como `null`, vacío o solo con caracteres eliminados por `trim()` produce HTTP
+400. Los valores no string se rechazan durante la deserialización de Jackson;
+no se garantiza conversión de números, booleanos, arrays u objetos a string.
 
 Fuentes: [LoginRequest.java](../src/main/java/com/bcp/workshop/auth/LoginRequest.java#L3),
-[AuthResource.validate](../src/main/java/com/bcp/workshop/auth/AuthResource.java#L47),
+[AuthResource.login](../src/main/java/com/bcp/workshop/auth/AuthResource.java#L27),
 [application.properties:8](../src/main/resources/application.properties#L8)
 y [AuthResourceTest.java](../src/test/java/com/bcp/workshop/auth/AuthResourceTest.java#L36).
 
@@ -98,8 +102,8 @@ y [AuthResourceTest.java](../src/test/java/com/bcp/workshop/auth/AuthResourceTes
 
 | campo | tipo | descripción |
 |---|---|---|
-| `token` | string | JWT firmado RS256, tres segmentos Base64URL. Claims: `sub` (usuario), `role`, `iss=workshop-auth-backend`, `aud` incluye `workshop-api`, `iat` y `exp` (tiempo Unix en segundos). No contiene el secreto legado ni la clave privada. |
-| `expiresIn` | integer | Siempre `3600`, en segundos. Coincide con el plazo usado por el emisor. No implica que este backend valide tokens después. |
+| `token` | string | JWT firmado RS256, tres segmentos Base64URL. Claims: `sub` (usuario), `client` (valor exacto aceptado), `role`, `iss=workshop-auth-backend`, `aud` incluye `workshop-api`, `iat` y `exp` (tiempo Unix en segundos). No contiene un secreto ni la clave privada. |
+| `expiresIn` | integer | Segundos restantes hasta `exp`, derivados del mismo instante de emisión. El plazo conserva una hora (`exp = iat + 3600`); se admite una diferencia máxima de un segundo por redondeo Unix. No implica que este backend valide tokens después. |
 | `user` | object | Identidad pública. Solo contiene los tres campos siguientes; no contiene ID, contraseña ni hash. |
 | `user.username` | string | Nombre de usuario recuperado de la base. |
 | `user.displayName` | string | Nombre visible transformado mediante `StringEscapeUtils.escapeHtml4`. Por ejemplo, `<b>A & B</b>` se devuelve como `&lt;b&gt;A &amp; B&lt;/b&gt;`. |
@@ -121,16 +125,16 @@ Ejemplo de estructura completa (el string del token es simbólico y no utilizabl
 }
 ```
 
-Cada emisión calcula `exp = iat + 3600`. El consumidor debe verificar firma
+Cada emisión calcula `exp = iat + 3600`; `expiresIn` se deriva de esos valores
+de emisión, no de un contador independiente. El consumidor debe verificar firma
 RS256 con la clave pública acordada, emisor, audiencia y vencimiento; no basta
 decodificar. La autorización humana de H-03 confirmó la transición externa.
 La prueba local valida rechazo de firma alterada, clave incorrecta y expiración;
 no representa ejecución de otros componentes.
 El orden de propiedades JSON no forma parte del contrato.
 
-Fuentes: [AuthResource.success](../src/main/java/com/bcp/workshop/auth/AuthResource.java#L60),
-[DTOs de respuesta](../src/main/java/com/bcp/workshop/auth/AuthResource.java#L66),
-[TokenService.create](../src/main/java/com/bcp/workshop/auth/TokenService.java)
+Fuentes: [AuthResource.login](../src/main/java/com/bcp/workshop/auth/AuthResource.java#L27),
+[TokenService.issue](../src/main/java/com/bcp/workshop/auth/TokenService.java)
 y [AuthResourceTest.java](../src/test/java/com/bcp/workshop/auth/AuthResourceTest.java#L36).
 
 ### 5. Respuestas de error
@@ -144,20 +148,19 @@ Las respuestas siguientes son JSON. No hay un objeto `error` envolvente.
 | 400 | El argumento de petición es nulo. También se observó con JSON `null` y cuerpo HTTP ausente. | `{"message":"Request is null"}` |
 | 400 | `username` ausente, `null`, vacío o solo caracteres eliminados por `trim()`. Incluye `{}`. | `{"message":"Username is required"}` |
 | 400 | El usuario pasa la validación, pero `password` falta, es `null` o está vacío según `trim()`. | `{"message":"Password is required"}` |
+| 400 | `client` falta, es `null`, vacío o solo contiene caracteres eliminados por `trim()`. | `{"message":"Client is required"}` |
 | 401 | Usuario inexistente o contraseña incorrecta. El nombre se interpola literalmente en el mensaje. | `{"message":"Invalid user student or password"}` |
-| 500 | Fallo de consulta SQLite: se propaga la causa y no se interpreta como credenciales incorrectas. | `{"message":"Internal server error"}` |
+| 500 | Fallo de consulta SQLite: se distingue de credenciales incorrectas. | `{"message":"Internal server error"}` |
 | 500 | Una excepción llega al Resource: por ejemplo hash inválido almacenado, fallo inesperado o excepción sin mensaje. | `{"message":"Internal server error"}` |
 
 Para HTTP 500, `message` es constante y no hay campo `exception`.
-La aplicación registra la causa una sola vez en el servidor, sin request,
-contraseña, hash ni token. Los fallos de inicialización impiden arrancar;
+La aplicación registra solo un aviso genérico, sin causa, request, contraseña,
+hash, token ni material de firma. Los fallos de inicialización impiden arrancar;
 no son respuestas HTTP de un proceso en servicio.
 
 Fuentes: [AuthResource.login](../src/main/java/com/bcp/workshop/auth/AuthResource.java#L27),
-[LegacyDatabase.findByUsername](../src/main/java/com/bcp/workshop/auth/LegacyDatabase.java#L52),
-[PasswordHasher.verify](../src/main/java/com/bcp/workshop/auth/PasswordHasher.java#L40),
-[prueba de fallo SQL](../src/test/java/com/bcp/workshop/auth/LegacyDatabaseTest.java#L26)
-y [pruebas de HTTP 500](../src/test/java/com/bcp/workshop/auth/AuthResourceTest.java#L96).
+[LegacyDatabase.findByCredentials](../src/main/java/com/bcp/workshop/auth/LegacyDatabase.java#L31)
+y [AuthResourceTest](../src/test/java/com/bcp/workshop/auth/AuthResourceTest.java).
 
 #### Rechazos gestionados por Quarkus/Jackson
 
@@ -168,7 +171,7 @@ no confundirlos con los mensajes anteriores:
 |---|---|---|
 | 400 | JSON malformado: cuerpo `{`. | Cuerpo vacío: cero bytes, no `{}` ni `null`. |
 | 400 | Tipo de raíz incompatible: cuerpo `[]`. | Cuerpo vacío: cero bytes. |
-| 400 | Tipo de campo incompatible: `{"username":{},"password":"x"}`. | `{"objectName":"LoginRequest","attributeName":"username","line":1,"column":13,"value":null}` |
+| 400 | Tipo de campo incompatible, por ejemplo `username` u `client` como objeto. | El cuerpo depende de Jackson y no forma parte del contrato estable. |
 | 405 | Método no implementado en esta ruta; se comprobó `GET /auth/login`. | Cuerpo vacío: cero bytes. |
 | 406 | `Accept: application/xml`, incompatible con la salida declarada, con un POST JSON. | Cuerpo vacío: cero bytes. |
 | 415 | `Content-Type: text/plain` con cuerpo `hello`. | Cuerpo vacío: cero bytes. |
@@ -190,7 +193,9 @@ definidos por el código de esta aplicación y no se inventan aquí.
 - El token ahora está firmado RS256 y expira según `exp`; no está cifrado.
   Este backend emite tokens y sus rutas siguen públicas. La validación efectiva
   en consumidores requiere firma, emisor, audiencia y fecha con clave pública.
-  La clave privada nunca se distribuye a consumidores ni se incluye en el JWT.
+  `AUTH_TOKEN_PRIVATE_KEY` debe apuntar a una clave RSA PKCS#8 PEM externa de al
+  menos 2048 bits; no hay fallback. La clave privada nunca se distribuye a
+  consumidores ni se incluye en el JWT.
 - Las contraseñas ahora se almacenan y verifican con PBKDF2-HMAC-SHA256,
   salt aleatorio individual, clave de 32 bytes y comparación
   `MessageDigest.isEqual`. Coste por defecto: 600000 iteraciones, configurable
